@@ -269,12 +269,12 @@ def extract(
 
 # ------------------------------------------------------------ run-pipeline
 @app.command(name="run-pipeline")
-def run_pipeline(
+def run_pipeline_cmd(
     url: str = typer.Argument(..., help="Nowcoder URL to crawl + extract"),
     headless: bool = typer.Option(True, "--headless/--no-headless"),
     no_cache: bool = typer.Option(False, "--no-cache"),
 ) -> None:
-    """Crawl + clean + extract in one go (D2 + D3 pipeline)."""
+    """[Legacy] Linear crawl + extract pipeline. Prefer `il graph` (D4)."""
     from .crawler import NowcoderFetcher, crawl_one
     from .llm import extract_post
 
@@ -319,6 +319,107 @@ def run_pipeline(
                 border_style="green",
             )
         )
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------------------ graph
+@app.command()
+def graph(
+    url: str = typer.Argument(..., help="Nowcoder URL to run through the LangGraph pipeline"),
+    headless: bool = typer.Option(True, "--headless/--no-headless"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    no_reuse: bool = typer.Option(False, "--no-reuse", help="Force refetch even if URL already crawled"),
+    min_chars: int = typer.Option(200),
+) -> None:
+    """Run the LangGraph state-machine pipeline (D4)."""
+    from .agent import run_pipeline
+    from .crawler import NowcoderFetcher
+
+    async def _run() -> None:
+        fetcher = NowcoderFetcher(headless=headless)
+        await fetcher.start()
+        try:
+            final = await run_pipeline(
+                url,
+                fetcher=fetcher,
+                use_cache=not no_cache,
+                min_chars=min_chars,
+                reuse_existing=not no_reuse,
+            )
+        finally:
+            await fetcher.stop()
+
+        meta = Table(title="graph result", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("post_id", str(final.get("post_id")))
+        meta.add_row("title", final.get("title") or "")
+        meta.add_row("chars", str(final.get("char_count")))
+        meta.add_row("skip_reason", final.get("skip_reason") or "(none)")
+        meta.add_row("cache_hit", "yes" if final.get("extract_cache_hit") else "no")
+        meta.add_row("errors", "; ".join(final.get("errors") or []) or "(none)")
+        if final.get("extract_usage"):
+            usage = final["extract_usage"]
+            meta.add_row(
+                "tokens",
+                f"in={usage.get('prompt_tokens')} out={usage.get('completion_tokens')} total={usage.get('total_tokens')}",
+            )
+        console.print(meta)
+
+        if final.get("skip_reason"):
+            console.print(Panel(final.get("skip_reason"), title="halted", border_style="yellow"))
+            raise typer.Exit(code=2)
+        if final.get("errors"):
+            raise typer.Exit(code=3)
+        console.print(Panel("ok", title="graph", border_style="green"))
+
+    asyncio.run(_run())
+
+
+# ----------------------------------------------------------------- resume
+@app.command()
+def resume(
+    statuses: str = typer.Option(
+        "failed,pending",
+        help="Comma-separated extract_status values to retry",
+    ),
+    limit: int = typer.Option(50, help="Max posts to retry in this run"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    headless: bool = typer.Option(True, "--headless/--no-headless"),
+) -> None:
+    """Re-run the LangGraph pipeline for posts whose extract_status is failed/pending."""
+    from .agent import resume_failed
+    from .crawler import NowcoderFetcher
+
+    async def _run() -> None:
+        statuses_tuple = tuple(s.strip() for s in statuses.split(",") if s.strip())
+        fetcher = NowcoderFetcher(headless=headless)
+        await fetcher.start()
+        try:
+            summaries = await resume_failed(
+                statuses=statuses_tuple,
+                limit=limit,
+                use_cache=not no_cache,
+                fetcher=fetcher,
+            )
+        finally:
+            await fetcher.stop()
+
+        if not summaries:
+            console.print(Panel(f"no posts matching {statuses_tuple}", title="resume", border_style="yellow"))
+            return
+
+        table = Table(title=f"resumed {len(summaries)} posts")
+        table.add_column("id")
+        table.add_column("status")
+        table.add_column("notes")
+        for s in summaries:
+            ok = bool(s.get("extracted")) and not s.get("skip_reason") and not s.get("errors")
+            status = "[green]ok[/green]" if ok else "[red]err[/red]"
+            note = s.get("skip_reason") or "; ".join(s.get("errors", [])) or "extracted"
+            table.add_row(str(s["post_id"]), status, note)
+        console.print(table)
 
     asyncio.run(_run())
 
