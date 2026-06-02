@@ -929,5 +929,23 @@ def dlq(
         raise typer.Exit(code=1)
 
 
+# ----------------------------------------------------------------- serve
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(8000),
+    reload: bool = typer.Option(False, "--reload"),
+) -> None:
+    """Run the FastAPI dev server (uvicorn)."""
+    import uvicorn
+
+    uvicorn.run(
+        "interviewlens.api.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
 if __name__ == "__main__":
     app()

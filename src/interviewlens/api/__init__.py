@@ -1,1 +1,4 @@
-"""FastAPI routes — implemented in D10."""
+"""FastAPI public REST surface."""
+from .app import app
+
+__all__ = ["app"]
