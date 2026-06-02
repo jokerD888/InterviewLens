@@ -832,5 +832,102 @@ def show_summary(
     asyncio.run(_run())
 
 
+# ------------------------------------------------------------------- batch
+@app.command()
+def batch(
+    pages: int = typer.Option(1, help="How many listing pages to scan"),
+    skip_normalize: bool = typer.Option(False, "--skip-normalize"),
+    inline: bool = typer.Option(False, "--inline", help="Run synchronously without Celery (debug)"),
+) -> None:
+    """Discover URLs from Nowcoder listings and enqueue Celery tasks."""
+
+    async def _inline() -> None:
+        from .crawler import NowcoderFetcher, discover_from_listing
+        from .agent import run_pipeline
+
+        fetcher = NowcoderFetcher()
+        await fetcher.start()
+        try:
+            urls = await discover_from_listing(pages=pages, fetcher=fetcher)
+            log.info("inline.discovered", n=len(urls))
+            for u in urls:
+                try:
+                    final = await run_pipeline(u, fetcher=fetcher, skip_normalize=skip_normalize)
+                    console.print(f"[green]ok[/green] {u} → post_id={final.get('post_id')} score={final.get('quality_score')}")
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]err[/red] {u} {exc}")
+        finally:
+            await fetcher.stop()
+
+    if inline:
+        asyncio.run(_inline())
+        return
+
+    from .tasks import enqueue_listing
+
+    result = enqueue_listing.delay(pages, skip_normalize)
+    console.print(
+        Panel(
+            f"task_id: {result.id}\nuse `il task-status {result.id}` or watch worker logs",
+            title="enqueued",
+            border_style="green",
+        )
+    )
+
+
+# --------------------------------------------------------------- task-status
+@app.command(name="task-status")
+def task_status(task_id: str = typer.Argument(...)) -> None:
+    """Show Celery task state by id."""
+    from celery.result import AsyncResult
+
+    from .tasks import celery_app
+
+    res = AsyncResult(task_id, app=celery_app)
+    meta = Table(title=f"task {task_id}", show_header=False)
+    meta.add_column("k", style="cyan")
+    meta.add_column("v")
+    meta.add_row("state", res.state)
+    meta.add_row("ready", str(res.ready()))
+    meta.add_row("successful", str(res.successful()) if res.ready() else "(pending)")
+    if res.ready():
+        try:
+            meta.add_row("result", str(res.result)[:300])
+        except Exception as exc:  # noqa: BLE001
+            meta.add_row("result_err", str(exc))
+    console.print(meta)
+
+
+# ----------------------------------------------------------------- dlq
+@app.command()
+def dlq(
+    action: str = typer.Argument("list", help="list | drain | clear"),
+    task_name: str = typer.Option("il.crawl_url", help="il.crawl_url | il.aggregate_pair"),
+    limit: int = typer.Option(50),
+) -> None:
+    """Inspect or drain the dead-letter queue."""
+    from .tasks import dlq_clear, dlq_drain, dlq_list
+
+    if action == "list":
+        items = dlq_list(task_name, limit)
+        if not items:
+            console.print(f"[yellow]DLQ {task_name} is empty[/yellow]")
+            return
+        table = Table(title=f"DLQ {task_name} · {len(items)} items")
+        table.add_column("payload")
+        for it in items:
+            table.add_row(json.dumps(it, ensure_ascii=False)[:200])
+        console.print(table)
+    elif action == "drain":
+        n = dlq_drain(task_name, limit)
+        console.print(f"[green]drained {n} items back into queue[/green]")
+    elif action == "clear":
+        n = dlq_clear(task_name)
+        console.print(f"[green]cleared {n} keys[/green]")
+    else:
+        console.print(f"[red]unknown action: {action}[/red]")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()

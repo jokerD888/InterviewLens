@@ -17,6 +17,7 @@
 | [docs/DAY6_NORMALIZER.md](docs/DAY6_NORMALIZER.md) | Day 6 三级归一（字典→embedding→LLM）+ 自学习 |
 | [docs/DAY7_SCORER.md](docs/DAY7_SCORER.md) | Day 7 四维度质量打分 + 排行榜 |
 | [docs/DAY8_AGGREGATOR.md](docs/DAY8_AGGREGATOR.md) | Day 8 RAG 分桶摘要 + embedding 回填（闭环！） |
+| [docs/DAY9_CELERY.md](docs/DAY9_CELERY.md) | Day 9 Celery 批量化 + 列表页爬虫 + 死信队列 |
 
 ## 快速开始（Day 1）
 
@@ -50,4 +51,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 6：Normalizer 节点 — 三级归一 + 自学习字典（`il normalize` / `il aliases`）
 - ✅ Day 7：Scorer 节点 — 四维度质量打分（`il rescore` / `il top-posts`）
 - ✅ Day 8：Aggregator + embedding 回填（`il backfill-embeddings` / `il aggregate` / `il show-summary`）— **核心闭环完成**
-- 🚧 Day 9：Celery 批量化 + 列表页爬虫
+- ✅ Day 9：Celery 批量化 + 列表页爬虫 + 死信队列（`il batch` / `il dlq` / `il task-status`）
+- 🚧 Day 10：FastAPI REST 接口

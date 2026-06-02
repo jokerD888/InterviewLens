@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Drop-in compose extension for the Celery worker. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.worker.yml up -d
+#
+# The worker shares the same network/secrets as the rest of the stack and reads
+# the project .env. Build context is the project root so it can `uv sync` and
+# `playwright install`.
+
+services:
+  worker:
+    image: python:3.13-slim
+    container_name: il-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    command: >
+      bash -lc "
+        pip install --no-cache-dir uv &&
+        uv sync --frozen &&
+        uv run playwright install --with-deps chromium &&
+        uv run celery -A interviewlens.tasks.celery_app worker --loglevel=INFO --concurrency=2
+      "
