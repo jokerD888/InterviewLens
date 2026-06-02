@@ -14,6 +14,7 @@
 | [docs/DAY3_EXTRACTOR.md](docs/DAY3_EXTRACTOR.md) | Day 3 LLM 结构化抽取使用指南 |
 | [docs/DAY4_LANGGRAPH.md](docs/DAY4_LANGGRAPH.md) | Day 4 LangGraph 状态机 + 断点续跑 |
 | [docs/DAY5_OBSERVABILITY.md](docs/DAY5_OBSERVABILITY.md) | Day 5 节点级 Langfuse trace + 缓存命中率 + 成本统计 |
+| [docs/DAY6_NORMALIZER.md](docs/DAY6_NORMALIZER.md) | Day 6 三级归一（字典→embedding→LLM）+ 自学习 |
 
 ## 快速开始（Day 1）
 
@@ -44,4 +45,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 3：LLM 结构化抽取（DeepSeek Function Calling + Redis 缓存 + Langfuse trace + `il extract` / `il run-pipeline`）
 - ✅ Day 4：LangGraph 状态机串联三节点 + 断点续跑（`il graph` / `il resume`）
 - ✅ Day 5：节点级 Langfuse trace + 缓存/token 仪表（`il metrics` / `il metrics-reset`）
-- 🚧 Day 6：Normalizer 节点（公司/岗位归一）
+- ✅ Day 6：Normalizer 节点 — 三级归一 + 自学习字典（`il normalize` / `il aliases`）
+- 🚧 Day 7：Scorer 节点（题量/答案/轮次/时间衰减打分）

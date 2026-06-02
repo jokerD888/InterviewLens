@@ -331,8 +331,9 @@ def graph(
     no_cache: bool = typer.Option(False, "--no-cache"),
     no_reuse: bool = typer.Option(False, "--no-reuse", help="Force refetch even if URL already crawled"),
     min_chars: int = typer.Option(200),
+    skip_normalize: bool = typer.Option(False, "--skip-normalize", help="Bypass Normalizer node (faster cold start)"),
 ) -> None:
-    """Run the LangGraph state-machine pipeline (D4)."""
+    """Run the LangGraph state-machine pipeline (D4+D6)."""
     from .agent import run_pipeline
     from .crawler import NowcoderFetcher
 
@@ -346,6 +347,7 @@ def graph(
                 use_cache=not no_cache,
                 min_chars=min_chars,
                 reuse_existing=not no_reuse,
+                skip_normalize=skip_normalize,
             )
         finally:
             await fetcher.stop()
@@ -358,6 +360,8 @@ def graph(
         meta.add_row("chars", str(final.get("char_count")))
         meta.add_row("skip_reason", final.get("skip_reason") or "(none)")
         meta.add_row("cache_hit", "yes" if final.get("extract_cache_hit") else "no")
+        meta.add_row("company_ids", ", ".join(map(str, final.get("company_ids") or [])) or "(none)")
+        meta.add_row("position_ids", ", ".join(map(str, final.get("position_ids") or [])) or "(none)")
         meta.add_row("errors", "; ".join(final.get("errors") or []) or "(none)")
         if final.get("extract_usage"):
             usage = final["extract_usage"]
@@ -484,6 +488,62 @@ def metrics_reset() -> None:
     async def _run() -> None:
         await reset_metrics()
         console.print("[green]metrics reset[/green]")
+
+    asyncio.run(_run())
+
+
+# -------------------------------------------------------------- normalize
+@app.command()
+def normalize(
+    alias: str = typer.Argument(..., help='Alias to resolve, e.g. "字节" or "服务端"'),
+    entity_type: str = typer.Option(
+        "company", "--type", help='"company" or "position"'
+    ),
+) -> None:
+    """Resolve a single alias through the three-tier normalizer."""
+    from .normalizer import resolve_entity
+
+    async def _run() -> None:
+        result = await resolve_entity(entity_type, alias)
+        meta = Table(title=f"normalize · {entity_type}", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("alias", alias)
+        meta.add_row("canonical_id", str(result.canonical_id))
+        meta.add_row("source", result.source)
+        meta.add_row("confidence", f"{result.confidence:.3f}")
+        console.print(meta)
+
+    asyncio.run(_run())
+
+
+@app.command()
+def aliases(
+    entity_type: str = typer.Option("company", "--type", help='"company" or "position"'),
+    limit: int = typer.Option(50),
+) -> None:
+    """List alias_dict entries for sanity-checking the dictionary."""
+
+    async def _run() -> None:
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    select(AliasDict)
+                    .where(AliasDict.entity_type == entity_type)
+                    .order_by(AliasDict.canonical_id, AliasDict.alias)
+                    .limit(limit)
+                )
+            ).scalars().all()
+        if not rows:
+            console.print(f"[yellow]no aliases for {entity_type}[/yellow]")
+            return
+        table = Table(title=f"alias_dict · {entity_type} · {len(rows)} rows")
+        table.add_column("alias", style="cyan")
+        table.add_column("canonical_id")
+        table.add_column("conf")
+        for r in rows:
+            table.add_row(r.alias, str(r.canonical_id), f"{r.confidence:.2f}")
+        console.print(table)
 
     asyncio.run(_run())
 

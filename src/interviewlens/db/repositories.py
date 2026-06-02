@@ -4,10 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from .models import Post, Question
+from .models import Post, PostCompanyPosition, Question
 
 
 async def get_post_by_url(session: AsyncSession, url: str) -> Post | None:
@@ -104,3 +105,36 @@ async def replace_questions(
             inserted += 1
     await session.flush()
     return inserted
+
+
+async def replace_post_links(
+    session: AsyncSession,
+    post_id: int,
+    *,
+    company_ids: list[int],
+    position_ids: list[int],
+) -> int:
+    """Replace post_company_position rows for ``post_id``.
+
+    Cartesian product of (company × position) — required by the schema. Returns
+    the number of rows inserted (deduplicated).
+    """
+    await session.execute(
+        delete(PostCompanyPosition).where(PostCompanyPosition.post_id == post_id)
+    )
+    seen: set[tuple[int, int]] = set()
+    pairs: list[dict] = []
+    for cid in company_ids or []:
+        for pid in position_ids or []:
+            if (cid, pid) in seen:
+                continue
+            seen.add((cid, pid))
+            pairs.append(
+                {"post_id": post_id, "company_id": cid, "position_id": pid}
+            )
+    if not pairs:
+        return 0
+    stmt = pg_insert(PostCompanyPosition).values(pairs).on_conflict_do_nothing()
+    await session.execute(stmt)
+    await session.flush()
+    return len(pairs)

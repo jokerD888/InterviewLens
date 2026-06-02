@@ -1,12 +1,9 @@
-"""LangGraph StateGraph wiring Crawler → Cleaner → Extractor.
+"""LangGraph StateGraph: Crawler → Cleaner → Extractor → Normalizer.
 
 Routing rules:
-- After cleaner: if ``skip_reason`` is set (e.g. "too_short"), END.
-- After extractor: always END (extractor sets its own skip_reason on failure).
-
-A Langfuse trace is created per ``run_pipeline`` invocation; each node attaches
-its own span beneath it. Without Langfuse credentials, all observability calls
-become no-ops.
+- After cleaner: skip_reason set → END.
+- After extractor: skip_reason set → END; otherwise → normalize.
+- After normalizer: END.
 """
 from __future__ import annotations
 
@@ -20,19 +17,22 @@ from ..observability import get_langfuse, langfuse_flush
 from .nodes import cleaner as cleaner_node
 from .nodes import crawler as crawler_node
 from .nodes import extractor as extractor_node
+from .nodes import normalizer as normalizer_node
 from .state import PipelineState, make_initial_state
 
 
 def _route_after_cleaner(state: PipelineState) -> str:
     if state.get("skip_reason"):
-        log.info(
-            "graph.route",
-            from_="cleaner",
-            decision="end",
-            reason=state.get("skip_reason"),
-        )
+        log.info("graph.route", from_="cleaner", decision="end", reason=state.get("skip_reason"))
         return "end"
     return "extract"
+
+
+def _route_after_extract(state: PipelineState) -> str:
+    if state.get("skip_reason"):
+        log.info("graph.route", from_="extractor", decision="end", reason=state.get("skip_reason"))
+        return "end"
+    return "normalize"
 
 
 def build_graph(
@@ -42,13 +42,16 @@ def build_graph(
     min_chars: int = 200,
     reuse_existing: bool = True,
     trace: Any | None = None,
+    skip_normalize: bool = False,
 ):
-    """Compile a StateGraph parameterised on the runtime knobs."""
+    """Compile a StateGraph parameterised on the runtime knobs.
+
+    Set ``skip_normalize=True`` for environments without an embedding model
+    cached locally yet (e.g. first ever run).
+    """
 
     async def _crawl(state: PipelineState) -> dict[str, Any]:
-        return await crawler_node.run(
-            state, fetcher=fetcher, reuse=reuse_existing, trace=trace
-        )
+        return await crawler_node.run(state, fetcher=fetcher, reuse=reuse_existing, trace=trace)
 
     async def _clean(state: PipelineState) -> dict[str, Any]:
         return await cleaner_node.run(state, min_chars=min_chars, trace=trace)
@@ -56,10 +59,15 @@ def build_graph(
     async def _extract(state: PipelineState) -> dict[str, Any]:
         return await extractor_node.run(state, use_cache=use_cache, trace=trace)
 
+    async def _normalize(state: PipelineState) -> dict[str, Any]:
+        return await normalizer_node.run(state, trace=trace)
+
     graph: StateGraph = StateGraph(PipelineState)
     graph.add_node("crawl", _crawl)
     graph.add_node("clean", _clean)
     graph.add_node("extract", _extract)
+    if not skip_normalize:
+        graph.add_node("normalize", _normalize)
 
     graph.add_edge(START, "crawl")
     graph.add_edge("crawl", "clean")
@@ -68,7 +76,15 @@ def build_graph(
         _route_after_cleaner,
         {"extract": "extract", "end": END},
     )
-    graph.add_edge("extract", END)
+    if skip_normalize:
+        graph.add_edge("extract", END)
+    else:
+        graph.add_conditional_edges(
+            "extract",
+            _route_after_extract,
+            {"normalize": "normalize", "end": END},
+        )
+        graph.add_edge("normalize", END)
 
     return graph.compile()
 
@@ -80,11 +96,9 @@ async def run_pipeline(
     use_cache: bool = True,
     min_chars: int = 200,
     reuse_existing: bool = True,
+    skip_normalize: bool = False,
 ) -> PipelineState:
-    """Build + invoke + return final state for one URL.
-
-    A Langfuse trace named ``il.pipeline`` is created per call (if configured).
-    """
+    """Build + invoke + return final state for one URL."""
     lf = get_langfuse()
     trace = None
     if lf is not None:
@@ -96,6 +110,7 @@ async def run_pipeline(
                     "use_cache": use_cache,
                     "min_chars": min_chars,
                     "reuse_existing": reuse_existing,
+                    "skip_normalize": skip_normalize,
                 },
             )
         except Exception as exc:  # noqa: BLE001
@@ -108,6 +123,7 @@ async def run_pipeline(
         min_chars=min_chars,
         reuse_existing=reuse_existing,
         trace=trace,
+        skip_normalize=skip_normalize,
     )
     initial = make_initial_state(url)
     try:
@@ -119,6 +135,8 @@ async def run_pipeline(
                         "post_id": final.get("post_id"),
                         "skip_reason": final.get("skip_reason"),
                         "errors": final.get("errors"),
+                        "company_ids": final.get("company_ids"),
+                        "position_ids": final.get("position_ids"),
                     }
                 )
             except Exception:  # noqa: BLE001

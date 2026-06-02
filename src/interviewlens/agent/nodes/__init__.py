@@ -1,4 +1,4 @@
-"""Common helpers for nodes (shared fetcher injection, etc.)."""
-from . import cleaner, crawler, extractor
+"""Common helpers for nodes."""
+from . import cleaner, crawler, extractor, normalizer
 
-__all__ = ["cleaner", "crawler", "extractor"]
+__all__ = ["cleaner", "crawler", "extractor", "normalizer"]
