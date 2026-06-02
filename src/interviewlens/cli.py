@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlmodel import select
 
 from .config import PROJECT_ROOT, settings
-from .db import AliasDict, Company, Position, Post, session_scope
+from .db import AliasDict, Company, Position, Post, Summary, session_scope
 from .logging import log
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="InterviewLens CLI")
@@ -697,6 +697,137 @@ def top_posts(
                 (r[1] or "")[:60],
             )
         console.print(table)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------- backfill-embeddings
+@app.command(name="backfill-embeddings")
+def backfill_embeddings_cmd(
+    batch_size: int = typer.Option(64),
+    limit: int | None = typer.Option(None, help="Process at most N rows"),
+    force: bool = typer.Option(False, "--force", help="Re-embed rows that already have embedding"),
+) -> None:
+    """Encode questions.content with bge-m3 and write to questions.embedding."""
+    from .embedding import backfill_embeddings
+
+    async def _run() -> None:
+        stats = await backfill_embeddings(batch_size=batch_size, limit=limit, force=force)
+        meta = Table(title="backfill embeddings", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("scanned", str(stats.scanned))
+        meta.add_row("embedded", str(stats.embedded))
+        meta.add_row("skipped", str(stats.skipped))
+        console.print(meta)
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------------ aggregate
+@app.command()
+def aggregate(
+    company: str | None = typer.Option(None, help="Canonical company name; omit to aggregate all pairs"),
+    position: str | None = typer.Option(None, help="Canonical position name; required when company is given"),
+    period: str | None = typer.Option(None, help='e.g. "2025Q2"; omit for "all"'),
+    top_n: int = typer.Option(100),
+    min_quality: int = typer.Option(30),
+    no_write: bool = typer.Option(False, "--no-write", help="Print summary, don't persist"),
+) -> None:
+    """Run RAG-based summarisation per (company × position × period) bucket."""
+    from .aggregator import aggregate_all, aggregate_one
+
+    async def _run() -> None:
+        if company and position:
+            outcome = await aggregate_one(
+                company=company,
+                position=position,
+                period=period,
+                top_n=top_n,
+                min_quality=min_quality,
+                write=not no_write,
+            )
+            meta = Table(title="aggregate one", show_header=False)
+            meta.add_column("k", style="cyan")
+            meta.add_column("v")
+            meta.add_row("company_id", str(outcome.company_id))
+            meta.add_row("position_id", str(outcome.position_id))
+            meta.add_row("period", outcome.period)
+            meta.add_row("sample_count", str(outcome.sample_count))
+            meta.add_row("summary_chars", str(outcome.summary_chars))
+            meta.add_row("written", str(outcome.written))
+            meta.add_row("skip_reason", outcome.skip_reason or "(none)")
+            console.print(meta)
+            return
+
+        if company or position:
+            console.print("[red]--company and --position must be set together[/red]")
+            raise typer.Exit(code=1)
+
+        results = await aggregate_all(
+            top_n=top_n,
+            min_quality=min_quality,
+            period=period,
+            write=not no_write,
+        )
+        if not results:
+            console.print("[yellow]no buckets matched[/yellow]")
+            return
+        table = Table(title=f"aggregate all · {len(results)} buckets")
+        table.add_column("c_id")
+        table.add_column("p_id")
+        table.add_column("period")
+        table.add_column("samples")
+        table.add_column("chars")
+        table.add_column("status")
+        for r in results:
+            table.add_row(
+                str(r.company_id),
+                str(r.position_id),
+                r.period,
+                str(r.sample_count),
+                str(r.summary_chars),
+                r.skip_reason or "ok",
+            )
+        console.print(table)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------- show-summary
+@app.command(name="show-summary")
+def show_summary(
+    company: str = typer.Argument(..., help="Canonical company name"),
+    position: str = typer.Argument(..., help="Canonical position name"),
+    period: str = typer.Option("all", help='e.g. "2025Q2"'),
+) -> None:
+    """Print a stored summary as markdown."""
+
+    async def _run() -> None:
+        async with session_scope() as s:
+            row = (
+                await s.execute(
+                    select(Summary, Company, Position)
+                    .join(Company, Company.id == Summary.company_id)
+                    .join(Position, Position.id == Summary.position_id)
+                    .where(
+                        Company.canonical == company,
+                        Position.canonical == position,
+                        Summary.period == period,
+                    )
+                )
+            ).first()
+        if row is None:
+            console.print(f"[red]no summary for {company} / {position} / {period}[/red]")
+            raise typer.Exit(code=1)
+        summary, c, p = row
+        console.print(
+            Panel(
+                summary.content_md,
+                title=f"{c.canonical} · {p.canonical} · {summary.period} · {summary.sample_count} samples",
+                border_style="cyan",
+            )
+        )
 
     asyncio.run(_run())
 

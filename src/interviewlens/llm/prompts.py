@@ -108,3 +108,62 @@ NORMALIZE_FUNCTION_SCHEMA: dict = {
         },
     },
 }
+
+
+# --------------------------------------------------------------- Aggregator
+
+AGGREGATOR_SYSTEM = """你是面试备考助手。基于用户给出的真实面试题目（已按公司+岗位+季度筛选），
+总结高频考点并给出备考建议。
+
+铁律：
+1. 所有「高频考点」必须有原题支撑，每条引用 1-2 道原题。
+2. 不要编造题目；引用原题必须来自给定列表。
+3. 备考建议要具体到技术点（如「BTree vs LSM 比较」「ZSet 内部结构」），
+   不要「多刷算法」「夯实基础」这种空话。
+4. 输出严格 markdown，章节结构必须按用户给定的模板。"""
+
+
+def build_aggregator_messages(
+    *,
+    company: str,
+    position: str,
+    period: str,
+    questions: list[dict],
+) -> list[dict]:
+    """Compose Aggregator messages.
+
+    questions: list of {content, category, freq, quality_score, source_url}
+    sorted by freq desc.
+    """
+    lines = []
+    for i, q in enumerate(questions, 1):
+        cat = q.get("category") or ""
+        freq = q.get("freq") or 1
+        score = q.get("quality_score")
+        prefix = f"{i:3}. [{cat}]" if cat else f"{i:3}."
+        meta = f"freq={freq}"
+        if score is not None:
+            meta += f" score={score}"
+        lines.append(f"{prefix} ({meta}) {q['content']}")
+    questions_block = "\n".join(lines) or "(无题目)"
+
+    user = (
+        f"公司：{company}\n"
+        f"岗位：{position}\n"
+        f"周期：{period}\n"
+        f"题目数：{len(questions)}\n\n"
+        f"题目列表（按频次排序）：\n{questions_block}\n\n"
+        "请按以下章节输出：\n\n"
+        "## 高频考点 Top 10\n"
+        "（按频次排序，每条引用 1-2 道原题，原题用 > 引用块）\n\n"
+        "## 重点考察方向\n"
+        "（3-5 个分类总结，例如「分布式锁实现细节」「JVM GC 调优」）\n\n"
+        "## 易忽略的偏门题\n"
+        "（出现频次 1-2 但有特点的题目）\n\n"
+        "## 备考建议\n"
+        "（针对该公司该岗位的针对性建议，3-5 条）"
+    )
+    return [
+        {"role": "system", "content": AGGREGATOR_SYSTEM},
+        {"role": "user", "content": user},
+    ]
