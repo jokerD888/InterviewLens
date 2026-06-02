@@ -1,0 +1,76 @@
+[project]
+name = "interviewlens"
+version = "0.1.0"
+description = "Aggregate Nowcoder interview experiences with a LangGraph agent pipeline"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "InterviewLens" }]
+license = { text = "MIT" }
+
+dependencies = [
+    # web / api
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # db
+    "sqlmodel>=0.0.22",
+    "asyncpg>=0.30",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3.6",
+    "alembic>=1.14",
+    # crawler
+    "playwright>=1.48",
+    "trafilatura>=1.12",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    # llm / agent
+    "openai>=1.55",
+    "langgraph>=0.2.50",
+    "langfuse>=2.55",
+    "tenacity>=9.0",
+    # embedding
+    "sentence-transformers>=3.3",
+    "torch>=2.5",
+    # tasks
+    "celery>=5.4",
+    "redis>=5.2",
+    # util
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "rich>=13.9",
+    "typer>=0.13",
+    "structlog>=24.4",
+]
+
+[project.scripts]
+il = "interviewlens.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "ipython>=8.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/interviewlens"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

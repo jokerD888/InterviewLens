@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: il-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-il}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-il_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-interviewlens}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - il_pg_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-il} -d ${POSTGRES_DB:-interviewlens}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: il-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - il_redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: il-langfuse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_pass
+      POSTGRES_DB: langfuse
+    volumes:
+      - il_langfuse_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: il-langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "${LANGFUSE_PORT:-3001}:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_pass@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-please-use-openssl-rand-hex-32}
+      SALT: ${LANGFUSE_SALT:-change-me-too-use-openssl-rand-hex-32}
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3001}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_INIT_ORG_ID: il-org
+      LANGFUSE_INIT_PROJECT_ID: il-project
+
+volumes:
+  il_pg_data:
+  il_redis_data:
+  il_langfuse_db:

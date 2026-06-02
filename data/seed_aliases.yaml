@@ -1,0 +1,83 @@
+# Seed alias dictionary for InterviewLens
+# Loaded at startup to bootstrap alias_dict table.
+# Format: entity_type → list of {canonical, aliases: [...]}.
+
+company:
+  - canonical: 字节跳动
+    aliases: [字节, Bytedance, ByteDance, 抖音, TikTok, 飞书, Lark, 火山引擎]
+  - canonical: 腾讯
+    aliases: [Tencent, 鹅厂, 腾讯科技, WXG, IEG, CSIG, PCG, TEG]
+  - canonical: 阿里巴巴
+    aliases: [阿里, Alibaba, 阿里集团, 淘宝, 天猫]
+  - canonical: 蚂蚁集团
+    aliases: [蚂蚁, 蚂蚁金服, Ant, Antgroup]
+  - canonical: 百度
+    aliases: [Baidu, 狼厂, 百度公司]
+  - canonical: 美团
+    aliases: [Meituan, 美团点评]
+  - canonical: 京东
+    aliases: [JD, JD.com, 京东集团]
+  - canonical: 拼多多
+    aliases: [PDD, Pinduoduo, 多多]
+  - canonical: 网易
+    aliases: [Netease, 猪厂]
+  - canonical: 滴滴
+    aliases: [Didi, 滴滴出行]
+  - canonical: 小米
+    aliases: [Xiaomi, MI]
+  - canonical: 华为
+    aliases: [Huawei, 海思, HiSilicon]
+  - canonical: 快手
+    aliases: [Kuaishou, KS]
+  - canonical: 哔哩哔哩
+    aliases: [B站, bilibili, Bilibili]
+  - canonical: 微软
+    aliases: [Microsoft, MSFT, MS]
+  - canonical: 谷歌
+    aliases: [Google, Alphabet]
+  - canonical: 亚马逊
+    aliases: [Amazon, AWS, AMZ]
+  - canonical: Meta
+    aliases: [Facebook, FB, Instagram]
+  - canonical: 苹果
+    aliases: [Apple, AAPL]
+  - canonical: 英伟达
+    aliases: [NVIDIA, NV]
+  - canonical: OpenAI
+    aliases: [openai]
+  - canonical: 商汤
+    aliases: [SenseTime, 商汤科技]
+  - canonical: 旷视
+    aliases: [Megvii, 旷视科技, Face++]
+  - canonical: 大疆
+    aliases: [DJI, 大疆创新]
+  - canonical: 携程
+    aliases: [Ctrip, Trip.com]
+
+position:
+  - canonical: 后端开发
+    aliases: [后端, 服务端, 后台开发, 后端工程师, Java后端, Go后端, 服务端开发, 后端研发, Java开发]
+  - canonical: 前端开发
+    aliases: [前端, 大前端, 前端工程师, 前端研发, Web前端]
+  - canonical: 客户端开发
+    aliases: [客户端, iOS开发, Android开发, 移动端, App开发]
+  - canonical: 算法工程师
+    aliases: [算法, 推荐算法, 搜索算法, 广告算法, NLP算法, CV算法, 机器学习, ML工程师]
+  - canonical: 大模型算法
+    aliases: [大模型, LLM, AIGC, LLM算法]
+  - canonical: 数据开发
+    aliases: [数据工程师, 数仓, 大数据开发, 数据研发, BI开发]
+  - canonical: 数据分析
+    aliases: [数据分析师, BA, 商业分析]
+  - canonical: 测试开发
+    aliases: [QA, 测开, 测试, 软件测试]
+  - canonical: SRE
+    aliases: [运维, 运维开发, DevOps, 系统工程师, 基础架构]
+  - canonical: 数据库内核
+    aliases: [DBA, 数据库开发, DB内核]
+  - canonical: 嵌入式开发
+    aliases: [嵌入式, 固件开发, 底层开发]
+  - canonical: 安全工程师
+    aliases: [安全, 信息安全, 网络安全]
+  - canonical: 产品经理
+    aliases: [PM, 产品]
