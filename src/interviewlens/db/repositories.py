@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from .models import Post
+from .models import Post, Question
 
 
 async def get_post_by_url(session: AsyncSession, url: str) -> Post | None:
@@ -70,3 +70,37 @@ async def mark_extract_status(
     if version is not None:
         values["extract_version"] = version
     await session.execute(update(Post).where(Post.id == post_id).values(**values))
+
+
+async def replace_questions(
+    session: AsyncSession,
+    post_id: int,
+    rounds: list[dict],
+) -> int:
+    """Drop existing questions for a post and insert the new round/question rows.
+
+    ``rounds`` is the JSON-shaped list from ExtractedPost. Embedding stays NULL
+    here — D6 will backfill it. Returns total inserted question count.
+    """
+    await session.execute(delete(Question).where(Question.post_id == post_id))
+    inserted = 0
+    for r in rounds:
+        round_no = int(r.get("round_no") or 1)
+        round_type = r.get("round_type")
+        for q in r.get("questions") or []:
+            content = (q.get("content") or "").strip()
+            if not content:
+                continue
+            session.add(
+                Question(
+                    post_id=post_id,
+                    round_no=round_no,
+                    round_type=round_type,
+                    content=content,
+                    category=q.get("category"),
+                    answer_brief=q.get("answer_brief"),
+                )
+            )
+            inserted += 1
+    await session.flush()
+    return inserted

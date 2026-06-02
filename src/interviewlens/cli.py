@@ -213,5 +213,115 @@ def show_post(
     asyncio.run(_run())
 
 
+# --------------------------------------------------------------- extract
+@app.command()
+def extract(
+    post_id: int = typer.Argument(..., help="Post id to extract structured data from"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass Redis LLM result cache"),
+) -> None:
+    """Run Extractor (DeepSeek Function Calling) on a post's cleaned_text."""
+    from .llm import extract_post
+
+    async def _run() -> None:
+        outcome = await extract_post(post_id, use_cache=not no_cache)
+        if not outcome.success:
+            console.print(Panel(outcome.error or "unknown error", title="extract failed", border_style="red"))
+            raise typer.Exit(code=1)
+
+        parsed = outcome.parsed
+        assert parsed is not None
+        meta = Table(title=f"extract#{post_id}", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("companies", ", ".join(parsed.companies) or "(none)")
+        meta.add_row("positions", ", ".join(parsed.positions) or "(none)")
+        meta.add_row("level", parsed.level.value)
+        meta.add_row("interview_date", parsed.interview_date or "(unknown)")
+        meta.add_row("rounds", str(len(parsed.rounds)))
+        meta.add_row("questions inserted", str(outcome.questions_inserted))
+        meta.add_row("cache_hit", "yes" if outcome.cache_hit else "no")
+        if outcome.usage:
+            usage_str = (
+                f"in={outcome.usage.get('prompt_tokens')} "
+                f"out={outcome.usage.get('completion_tokens')} "
+                f"total={outcome.usage.get('total_tokens')}"
+            )
+            meta.add_row("tokens", usage_str)
+        meta.add_row("model", outcome.model or "")
+        console.print(meta)
+
+        for r in parsed.rounds:
+            preview_lines = []
+            for i, q in enumerate(r.questions, 1):
+                cat = f"[{q.category.value}]" if q.category else ""
+                preview_lines.append(f"{i:2}. {cat} {q.content[:120]}")
+            body = "\n".join(preview_lines) or "(no questions)"
+            console.print(
+                Panel(
+                    body,
+                    title=f"round {r.round_no} · {r.round_type.value if r.round_type else '?'}",
+                    border_style="cyan",
+                )
+            )
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------------ run-pipeline
+@app.command(name="run-pipeline")
+def run_pipeline(
+    url: str = typer.Argument(..., help="Nowcoder URL to crawl + extract"),
+    headless: bool = typer.Option(True, "--headless/--no-headless"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+) -> None:
+    """Crawl + clean + extract in one go (D2 + D3 pipeline)."""
+    from .crawler import NowcoderFetcher, crawl_one
+    from .llm import extract_post
+
+    async def _run() -> None:
+        fetcher = NowcoderFetcher(headless=headless)
+        await fetcher.start()
+        try:
+            crawl_outcome = await crawl_one(url, fetcher=fetcher)
+        finally:
+            await fetcher.stop()
+
+        if crawl_outcome.skipped:
+            console.print(
+                Panel(
+                    f"crawl skipped: {crawl_outcome.skip_reason}",
+                    title="pipeline halted",
+                    border_style="yellow",
+                )
+            )
+            raise typer.Exit(code=2)
+
+        extract_outcome = await extract_post(crawl_outcome.post_id, use_cache=not no_cache)
+        if not extract_outcome.success:
+            console.print(
+                Panel(
+                    extract_outcome.error or "unknown error",
+                    title="extract failed",
+                    border_style="red",
+                )
+            )
+            raise typer.Exit(code=3)
+
+        console.print(
+            Panel(
+                f"post_id      : {crawl_outcome.post_id}\n"
+                f"crawl chars  : {crawl_outcome.char_count}\n"
+                f"questions    : {extract_outcome.questions_inserted}\n"
+                f"cache_hit    : {extract_outcome.cache_hit}\n"
+                f"model        : {extract_outcome.model}\n"
+                f"tokens       : {extract_outcome.usage}",
+                title="pipeline ok",
+                border_style="green",
+            )
+        )
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()

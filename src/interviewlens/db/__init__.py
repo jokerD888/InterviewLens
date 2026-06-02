@@ -11,6 +11,7 @@ from .models import (
 from .repositories import (
     get_post_by_url,
     mark_extract_status,
+    replace_questions,
     set_cleaned_text,
     upsert_raw_post,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "get_session_factory",
     "get_post_by_url",
     "mark_extract_status",
+    "replace_questions",
     "session_scope",
     "set_cleaned_text",
     "upsert_raw_post",
