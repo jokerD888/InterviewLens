@@ -34,6 +34,7 @@ class PipelineState(TypedDict, total=False):
 
     # ---- scorer (D7) --------------------------------------------------
     quality_score: int | None
+    score_breakdown: dict[str, int] | None
 
     # ---- control flow --------------------------------------------------
     skip_reason: str | None

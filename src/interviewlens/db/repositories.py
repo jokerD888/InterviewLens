@@ -73,6 +73,12 @@ async def mark_extract_status(
     await session.execute(update(Post).where(Post.id == post_id).values(**values))
 
 
+async def set_quality_score(session: AsyncSession, post_id: int, score: int) -> None:
+    await session.execute(
+        update(Post).where(Post.id == post_id).values(quality_score=score)
+    )
+
+
 async def replace_questions(
     session: AsyncSession,
     post_id: int,

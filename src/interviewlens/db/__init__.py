@@ -14,6 +14,7 @@ from .repositories import (
     replace_post_links,
     replace_questions,
     set_cleaned_text,
+    set_quality_score,
     upsert_raw_post,
 )
 from .session import get_engine, get_session_factory, session_scope
@@ -34,5 +35,6 @@ __all__ = [
     "replace_questions",
     "session_scope",
     "set_cleaned_text",
+    "set_quality_score",
     "upsert_raw_post",
 ]

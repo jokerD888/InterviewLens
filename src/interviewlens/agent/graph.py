@@ -1,9 +1,10 @@
-"""LangGraph StateGraph: Crawler → Cleaner → Extractor → Normalizer.
+"""LangGraph StateGraph: Crawler → Cleaner → Extractor → Normalizer → Scorer.
 
 Routing rules:
 - After cleaner: skip_reason set → END.
-- After extractor: skip_reason set → END; otherwise → normalize.
-- After normalizer: END.
+- After extractor: skip_reason set → END; otherwise → normalize (or score when skip_normalize).
+- After normalizer: → score.
+- After scorer: → END.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from .nodes import cleaner as cleaner_node
 from .nodes import crawler as crawler_node
 from .nodes import extractor as extractor_node
 from .nodes import normalizer as normalizer_node
+from .nodes import scorer as scorer_node
 from .state import PipelineState, make_initial_state
 
 
@@ -26,13 +28,6 @@ def _route_after_cleaner(state: PipelineState) -> str:
         log.info("graph.route", from_="cleaner", decision="end", reason=state.get("skip_reason"))
         return "end"
     return "extract"
-
-
-def _route_after_extract(state: PipelineState) -> str:
-    if state.get("skip_reason"):
-        log.info("graph.route", from_="extractor", decision="end", reason=state.get("skip_reason"))
-        return "end"
-    return "normalize"
 
 
 def build_graph(
@@ -44,11 +39,15 @@ def build_graph(
     trace: Any | None = None,
     skip_normalize: bool = False,
 ):
-    """Compile a StateGraph parameterised on the runtime knobs.
+    """Compile a StateGraph parameterised on the runtime knobs."""
 
-    Set ``skip_normalize=True`` for environments without an embedding model
-    cached locally yet (e.g. first ever run).
-    """
+    next_after_extract = "score" if skip_normalize else "normalize"
+
+    def _route_after_extract(state: PipelineState) -> str:
+        if state.get("skip_reason"):
+            log.info("graph.route", from_="extractor", decision="end", reason=state.get("skip_reason"))
+            return "end"
+        return next_after_extract
 
     async def _crawl(state: PipelineState) -> dict[str, Any]:
         return await crawler_node.run(state, fetcher=fetcher, reuse=reuse_existing, trace=trace)
@@ -62,12 +61,16 @@ def build_graph(
     async def _normalize(state: PipelineState) -> dict[str, Any]:
         return await normalizer_node.run(state, trace=trace)
 
+    async def _score(state: PipelineState) -> dict[str, Any]:
+        return await scorer_node.run(state, trace=trace)
+
     graph: StateGraph = StateGraph(PipelineState)
     graph.add_node("crawl", _crawl)
     graph.add_node("clean", _clean)
     graph.add_node("extract", _extract)
     if not skip_normalize:
         graph.add_node("normalize", _normalize)
+    graph.add_node("score", _score)
 
     graph.add_edge(START, "crawl")
     graph.add_edge("crawl", "clean")
@@ -76,15 +79,21 @@ def build_graph(
         _route_after_cleaner,
         {"extract": "extract", "end": END},
     )
+
     if skip_normalize:
-        graph.add_edge("extract", END)
+        graph.add_conditional_edges(
+            "extract",
+            _route_after_extract,
+            {"score": "score", "end": END},
+        )
     else:
         graph.add_conditional_edges(
             "extract",
             _route_after_extract,
             {"normalize": "normalize", "end": END},
         )
-        graph.add_edge("normalize", END)
+        graph.add_edge("normalize", "score")
+    graph.add_edge("score", END)
 
     return graph.compile()
 
@@ -137,6 +146,7 @@ async def run_pipeline(
                         "errors": final.get("errors"),
                         "company_ids": final.get("company_ids"),
                         "position_ids": final.get("position_ids"),
+                        "quality_score": final.get("quality_score"),
                     }
                 )
             except Exception:  # noqa: BLE001

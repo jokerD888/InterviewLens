@@ -15,6 +15,7 @@
 | [docs/DAY4_LANGGRAPH.md](docs/DAY4_LANGGRAPH.md) | Day 4 LangGraph 状态机 + 断点续跑 |
 | [docs/DAY5_OBSERVABILITY.md](docs/DAY5_OBSERVABILITY.md) | Day 5 节点级 Langfuse trace + 缓存命中率 + 成本统计 |
 | [docs/DAY6_NORMALIZER.md](docs/DAY6_NORMALIZER.md) | Day 6 三级归一（字典→embedding→LLM）+ 自学习 |
+| [docs/DAY7_SCORER.md](docs/DAY7_SCORER.md) | Day 7 四维度质量打分 + 排行榜 |
 
 ## 快速开始（Day 1）
 
@@ -46,4 +47,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 4：LangGraph 状态机串联三节点 + 断点续跑（`il graph` / `il resume`）
 - ✅ Day 5：节点级 Langfuse trace + 缓存/token 仪表（`il metrics` / `il metrics-reset`）
 - ✅ Day 6：Normalizer 节点 — 三级归一 + 自学习字典（`il normalize` / `il aliases`）
-- 🚧 Day 7：Scorer 节点（题量/答案/轮次/时间衰减打分）
+- ✅ Day 7：Scorer 节点 — 四维度质量打分（`il rescore` / `il top-posts`）
+- 🚧 Day 8：Aggregator 节点（pgvector RAG + DeepSeek 摘要）

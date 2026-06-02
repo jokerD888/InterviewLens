@@ -362,6 +362,13 @@ def graph(
         meta.add_row("cache_hit", "yes" if final.get("extract_cache_hit") else "no")
         meta.add_row("company_ids", ", ".join(map(str, final.get("company_ids") or [])) or "(none)")
         meta.add_row("position_ids", ", ".join(map(str, final.get("position_ids") or [])) or "(none)")
+        meta.add_row("quality_score", str(final.get("quality_score")) if final.get("quality_score") is not None else "(none)")
+        if final.get("score_breakdown"):
+            br = final["score_breakdown"]
+            meta.add_row(
+                "score_breakdown",
+                f"q={br.get('quantity')} a={br.get('answers')} r={br.get('rounds')} t={br.get('recency')}",
+            )
         meta.add_row("errors", "; ".join(final.get("errors") or []) or "(none)")
         if final.get("extract_usage"):
             usage = final["extract_usage"]
@@ -543,6 +550,152 @@ def aliases(
         table.add_column("conf")
         for r in rows:
             table.add_row(r.alias, str(r.canonical_id), f"{r.confidence:.2f}")
+        console.print(table)
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------- rescore
+@app.command()
+def rescore(
+    post_id: int = typer.Argument(..., help="Post id to recompute quality_score for"),
+    rescore_all: bool = typer.Option(False, "--all", help="Ignore post_id, rescore every post with extracted data"),
+) -> None:
+    """Recompute Scorer output from existing questions table (no LLM call)."""
+    from sqlalchemy import update as sa_update
+
+    from .db import Question
+    from .scoring import score_extracted
+
+    async def _build_extracted(s, pid: int) -> dict | None:
+        rows = (
+            await s.execute(
+                select(Question).where(Question.post_id == pid).order_by(Question.round_no, Question.id)
+            )
+        ).scalars().all()
+        if not rows:
+            return None
+        rounds: dict[int, dict] = {}
+        for q in rows:
+            r = rounds.setdefault(q.round_no or 1, {"round_no": q.round_no or 1, "round_type": q.round_type, "questions": []})
+            r["questions"].append(
+                {
+                    "content": q.content,
+                    "category": q.category,
+                    "answer_brief": q.answer_brief,
+                }
+            )
+        return {"rounds": list(rounds.values())}
+
+    async def _do_one(pid: int) -> tuple[int, int, dict[str, int] | None]:
+        async with session_scope() as s:
+            post = (await s.execute(select(Post).where(Post.id == pid))).scalar_one_or_none()
+            if post is None:
+                return pid, -1, None
+            extracted = await _build_extracted(s, pid)
+            br = score_extracted(extracted, posted_at=post.posted_at)
+            await s.execute(sa_update(Post).where(Post.id == pid).values(quality_score=br.total))
+        return pid, br.total, br.as_dict()
+
+    async def _run() -> None:
+        if rescore_all:
+            async with session_scope() as s:
+                ids = [
+                    pid for (pid,) in (
+                        await s.execute(
+                            select(Post.id)
+                            .where(Post.extract_status == "done")
+                            .order_by(Post.id)
+                        )
+                    ).all()
+                ]
+            if not ids:
+                console.print("[yellow]no posts with extract_status='done'[/yellow]")
+                return
+            table = Table(title=f"rescored {len(ids)} posts")
+            table.add_column("post_id")
+            table.add_column("score")
+            table.add_column("breakdown")
+            for pid in ids:
+                _, total, br = await _do_one(pid)
+                table.add_row(
+                    str(pid),
+                    str(total),
+                    f"q={br['quantity']} a={br['answers']} r={br['rounds']} t={br['recency']}" if br else "(no data)",
+                )
+            console.print(table)
+            return
+
+        pid, total, br = await _do_one(post_id)
+        if total == -1:
+            console.print(f"[red]post {post_id} not found[/red]")
+            raise typer.Exit(code=1)
+        meta = Table(title=f"rescore post#{pid}", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("total", str(total))
+        if br:
+            meta.add_row("quantity", str(br["quantity"]))
+            meta.add_row("answers", str(br["answers"]))
+            meta.add_row("rounds", str(br["rounds"]))
+            meta.add_row("recency", str(br["recency"]))
+        console.print(meta)
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------------- top-posts
+@app.command(name="top-posts")
+def top_posts(
+    limit: int = typer.Option(20),
+    company: str | None = typer.Option(None, help="Filter by canonical company name"),
+    position: str | None = typer.Option(None, help="Filter by canonical position name"),
+) -> None:
+    """List highest-quality posts, optionally filtered by company/position."""
+    from sqlalchemy import text as sa_text
+
+    async def _run() -> None:
+        params: dict[str, object] = {"limit": limit}
+        clauses = ["po.quality_score IS NOT NULL"]
+        joins = ""
+        if company:
+            joins += (
+                " JOIN post_company_position pcp_c ON pcp_c.post_id = po.id"
+                " JOIN companies c ON c.id = pcp_c.company_id"
+            )
+            clauses.append("c.canonical = :company")
+            params["company"] = company
+        if position:
+            joins += (
+                " JOIN post_company_position pcp_p ON pcp_p.post_id = po.id"
+                " JOIN positions p ON p.id = pcp_p.position_id"
+            )
+            clauses.append("p.canonical = :position")
+            params["position"] = position
+        sql = (
+            "SELECT po.id, po.title, po.quality_score, po.posted_at, po.source_url"
+            f" FROM posts po{joins}"
+            f" WHERE {' AND '.join(clauses)}"
+            " ORDER BY po.quality_score DESC, po.posted_at DESC NULLS LAST"
+            " LIMIT :limit"
+        )
+        async with session_scope() as s:
+            rows = (await s.execute(sa_text(sql), params)).all()
+        if not rows:
+            console.print("[yellow]no rows[/yellow]")
+            return
+        table = Table(title=f"top {len(rows)} posts" + (f" · {company}" if company else "") + (f" · {position}" if position else ""))
+        table.add_column("id")
+        table.add_column("score")
+        table.add_column("posted_at")
+        table.add_column("title")
+        for r in rows:
+            table.add_row(
+                str(r[0]),
+                str(r[2]),
+                str(r[3]) if r[3] else "",
+                (r[1] or "")[:60],
+            )
         console.print(table)
 
     asyncio.run(_run())
