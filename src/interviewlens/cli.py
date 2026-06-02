@@ -424,5 +424,69 @@ def resume(
     asyncio.run(_run())
 
 
+# ---------------------------------------------------------------- metrics
+@app.command()
+def metrics(
+    price_in: float = typer.Option(1.0, "--price-in", help="DeepSeek price per million prompt tokens, CNY"),
+    price_out: float = typer.Option(2.0, "--price-out", help="DeepSeek price per million completion tokens, CNY"),
+) -> None:
+    """Show Redis-tracked metrics: cache hit rate, token totals, per-node latency."""
+    from .observability import fetch_metrics
+
+    async def _run() -> None:
+        snap = await fetch_metrics()
+
+        cache_table = Table(title="LLM cache")
+        cache_table.add_column("k", style="cyan")
+        cache_table.add_column("v")
+        cache_table.add_row("hits", str(snap.cache_hit))
+        cache_table.add_row("misses", str(snap.cache_miss))
+        cache_table.add_row("total", str(snap.cache_total))
+        cache_table.add_row("hit_rate", f"{snap.cache_hit_rate:.1%}")
+        console.print(cache_table)
+
+        tok_table = Table(title="Tokens & cost")
+        tok_table.add_column("k", style="cyan")
+        tok_table.add_column("v")
+        tok_table.add_row("prompt_tokens", f"{snap.tokens_prompt:,}")
+        tok_table.add_row("completion_tokens", f"{snap.tokens_completion:,}")
+        tok_table.add_row("total_tokens", f"{snap.tokens_total:,}")
+        cost = snap.estimated_cost_cny(
+            price_in_per_million=price_in,
+            price_out_per_million=price_out,
+        )
+        tok_table.add_row("estimated_cost", f"¥{cost:.4f}")
+        console.print(tok_table)
+
+        if snap.node_runs:
+            node_table = Table(title="Per-node latency")
+            node_table.add_column("node", style="cyan")
+            node_table.add_column("runs")
+            node_table.add_column("avg_ms")
+            for node, runs in sorted(snap.node_runs.items()):
+                node_table.add_row(
+                    node,
+                    str(runs),
+                    f"{snap.node_avg_ms.get(node, 0):.1f}",
+                )
+            console.print(node_table)
+        else:
+            console.print("[yellow]no node runs recorded yet[/yellow]")
+
+    asyncio.run(_run())
+
+
+@app.command(name="metrics-reset")
+def metrics_reset() -> None:
+    """Wipe all Redis metric counters (cache hits, tokens, node latency)."""
+    from .observability import reset_metrics
+
+    async def _run() -> None:
+        await reset_metrics()
+        console.print("[green]metrics reset[/green]")
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     app()

@@ -4,17 +4,19 @@ Routing rules:
 - After cleaner: if ``skip_reason`` is set (e.g. "too_short"), END.
 - After extractor: always END (extractor sets its own skip_reason on failure).
 
-The compiled graph is built lazily and cached so repeated runs reuse it.
+A Langfuse trace is created per ``run_pipeline`` invocation; each node attaches
+its own span beneath it. Without Langfuse credentials, all observability calls
+become no-ops.
 """
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
 from ..crawler import NowcoderFetcher
 from ..logging import log
+from ..observability import get_langfuse, langfuse_flush
 from .nodes import cleaner as cleaner_node
 from .nodes import crawler as crawler_node
 from .nodes import extractor as extractor_node
@@ -23,7 +25,12 @@ from .state import PipelineState, make_initial_state
 
 def _route_after_cleaner(state: PipelineState) -> str:
     if state.get("skip_reason"):
-        log.info("graph.route", from_="cleaner", decision="end", reason=state.get("skip_reason"))
+        log.info(
+            "graph.route",
+            from_="cleaner",
+            decision="end",
+            reason=state.get("skip_reason"),
+        )
         return "end"
     return "extract"
 
@@ -34,21 +41,20 @@ def build_graph(
     use_cache: bool = True,
     min_chars: int = 200,
     reuse_existing: bool = True,
+    trace: Any | None = None,
 ):
-    """Compile a StateGraph parameterised on the runtime knobs.
-
-    The returned object exposes ``ainvoke`` for one-shot async runs and
-    ``astream`` for streaming intermediate states.
-    """
+    """Compile a StateGraph parameterised on the runtime knobs."""
 
     async def _crawl(state: PipelineState) -> dict[str, Any]:
-        return await crawler_node.run(state, fetcher=fetcher, reuse=reuse_existing)
+        return await crawler_node.run(
+            state, fetcher=fetcher, reuse=reuse_existing, trace=trace
+        )
 
     async def _clean(state: PipelineState) -> dict[str, Any]:
-        return await cleaner_node.run(state, min_chars=min_chars)
+        return await cleaner_node.run(state, min_chars=min_chars, trace=trace)
 
     async def _extract(state: PipelineState) -> dict[str, Any]:
-        return await extractor_node.run(state, use_cache=use_cache)
+        return await extractor_node.run(state, use_cache=use_cache, trace=trace)
 
     graph: StateGraph = StateGraph(PipelineState)
     graph.add_node("crawl", _crawl)
@@ -75,13 +81,48 @@ async def run_pipeline(
     min_chars: int = 200,
     reuse_existing: bool = True,
 ) -> PipelineState:
-    """Convenience: build + invoke + return final state for one URL."""
+    """Build + invoke + return final state for one URL.
+
+    A Langfuse trace named ``il.pipeline`` is created per call (if configured).
+    """
+    lf = get_langfuse()
+    trace = None
+    if lf is not None:
+        try:
+            trace = lf.trace(
+                name="il.pipeline",
+                metadata={
+                    "url": url,
+                    "use_cache": use_cache,
+                    "min_chars": min_chars,
+                    "reuse_existing": reuse_existing,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("graph.trace_create_failed", err=str(exc))
+            trace = None
+
     app = build_graph(
         fetcher=fetcher,
         use_cache=use_cache,
         min_chars=min_chars,
         reuse_existing=reuse_existing,
+        trace=trace,
     )
     initial = make_initial_state(url)
-    final: PipelineState = await app.ainvoke(initial)
-    return final
+    try:
+        final: PipelineState = await app.ainvoke(initial)
+        if trace is not None:
+            try:
+                trace.update(
+                    output={
+                        "post_id": final.get("post_id"),
+                        "skip_reason": final.get("skip_reason"),
+                        "errors": final.get("errors"),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return final
+    finally:
+        langfuse_flush()

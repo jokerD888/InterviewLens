@@ -16,15 +16,10 @@ from tenacity import (
 
 from ..config import settings
 from ..logging import log
-
-try:  # Langfuse is optional at runtime; missing keys → quiet no-op.
-    from langfuse import Langfuse  # type: ignore
-except Exception:  # noqa: BLE001
-    Langfuse = None  # type: ignore
+from ..observability import get_langfuse
 
 
 _client: AsyncOpenAI | None = None
-_langfuse: "Langfuse | None" = None
 
 
 def get_client() -> AsyncOpenAI:
@@ -35,26 +30,6 @@ def get_client() -> AsyncOpenAI:
             base_url=settings.deepseek_base_url,
         )
     return _client
-
-
-def _get_langfuse() -> "Langfuse | None":
-    global _langfuse
-    if _langfuse is not None:
-        return _langfuse
-    if Langfuse is None:
-        return None
-    if not settings.langfuse_public_key or settings.langfuse_public_key.endswith("REPLACE_ME"):
-        return None
-    try:
-        _langfuse = Langfuse(
-            public_key=settings.langfuse_public_key,
-            secret_key=settings.langfuse_secret_key,
-            host=settings.langfuse_host,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("langfuse.init_failed", err=str(exc))
-        _langfuse = None
-    return _langfuse
 
 
 @dataclass(slots=True)
@@ -76,17 +51,24 @@ async def call_tool(
     max_tokens: int = 4096,
     trace_name: str | None = None,
     trace_metadata: dict | None = None,
+    trace: Any | None = None,
 ) -> ToolCallResult:
     """Call DeepSeek chat-completion with forced tool use.
 
-    Retries on transient API errors (3 attempts, exponential backoff). Forces a
-    single tool call back to JSON via ``json.loads``. Sends a Langfuse generation
-    span if credentials are configured.
+    If ``trace`` is given (a Langfuse Trace), generations hang under it.
+    Otherwise an ad-hoc trace is created if Langfuse is configured.
     """
     model = model or settings.deepseek_model_chat
     client = get_client()
-    lf = _get_langfuse()
-    trace = lf.trace(name=trace_name or "extract", metadata=trace_metadata or {}) if lf else None
+    lf = get_langfuse()
+    own_trace = False
+    if trace is None and lf is not None:
+        try:
+            trace = lf.trace(name=trace_name or "extract", metadata=trace_metadata or {})
+            own_trace = True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("langfuse.trace_create_failed", err=str(exc))
+            trace = None
 
     attempt_idx = 0
     async for attempt in AsyncRetrying(
@@ -105,16 +87,18 @@ async def call_tool(
                 temperature=local_temp,
                 msg_count=len(messages),
             )
-            generation = (
-                trace.generation(
-                    name="deepseek.tool_call",
-                    model=model,
-                    input=messages,
-                    metadata={"attempt": attempt_idx, "temperature": local_temp},
-                )
-                if trace
-                else None
-            )
+            generation = None
+            if trace is not None:
+                try:
+                    generation = trace.generation(
+                        name="deepseek.tool_call",
+                        model=model,
+                        input=messages,
+                        metadata={"attempt": attempt_idx, "temperature": local_temp},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("langfuse.gen_create_failed", err=str(exc))
+                    generation = None
 
             resp: ChatCompletion = await client.chat.completions.create(
                 model=model,
@@ -129,25 +113,37 @@ async def call_tool(
             tool_calls = choice.message.tool_calls or []
             if not tool_calls:
                 if generation:
-                    generation.end(level="ERROR", status_message="no tool call")
+                    try:
+                        generation.end(level="ERROR", status_message="no tool call")
+                    except Exception:  # noqa: BLE001
+                        pass
                 raise RuntimeError("LLM returned no tool call")
             tc = tool_calls[0]
             try:
                 args = json.loads(tc.function.arguments)
             except json.JSONDecodeError as exc:
                 if generation:
-                    generation.end(
-                        level="ERROR",
-                        status_message=f"JSONDecodeError: {exc}",
-                        output=tc.function.arguments,
-                    )
+                    try:
+                        generation.end(
+                            level="ERROR",
+                            status_message=f"JSONDecodeError: {exc}",
+                            output=tc.function.arguments,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 raise RuntimeError(f"Invalid JSON in tool args: {exc}") from exc
 
             usage = resp.usage.model_dump() if resp.usage else None
             if generation:
-                generation.end(output=args, usage=usage)
-            if trace:
-                trace.update(output=args)
+                try:
+                    generation.end(output=args, usage=usage)
+                except Exception:  # noqa: BLE001
+                    pass
+            if own_trace and trace is not None:
+                try:
+                    trace.update(output=args)
+                except Exception:  # noqa: BLE001
+                    pass
             log.info(
                 "llm.done",
                 tool=tc.function.name,
