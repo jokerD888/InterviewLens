@@ -10,6 +10,7 @@
 | [docs/PROMPT_LIBRARY.md](docs/PROMPT_LIBRARY.md) | 所有 LLM prompt 与版本管理规则 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 14 天 MVP day-by-day 排期 |
 | [docs/DAY1_BOOTSTRAP.md](docs/DAY1_BOOTSTRAP.md) | Day 1 一步步把骨架跑起来 |
+| [docs/DAY2_CRAWLER.md](docs/DAY2_CRAWLER.md) | Day 2 抓取与清洗使用指南 |
 
 ## 快速开始（Day 1）
 
@@ -35,5 +36,7 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 
 ## 状态
 
-🚧 Day 1 骨架完成：容器编排、依赖锁定、SQL 初始化、ORM、CLI 三件套（info/doctor/seed-aliases）。
-明天 Day 2 开始写 Playwright 抓取与 trafilatura 清洗。
+- ✅ Day 1：骨架（容器、SQL、ORM、CLI 三件套）
+- ✅ Day 2：抓取与清洗（Playwright + trafilatura + `il crawl` / `il show-post`）
+- 🚧 Day 3：DeepSeek Function Calling 抽取结构化 JSON
+- 🚧 Day 4：LangGraph 串联三节点
