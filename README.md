@@ -20,6 +20,7 @@
 | [docs/DAY9_CELERY.md](docs/DAY9_CELERY.md) | Day 9 Celery 批量化 + 列表页爬虫 + 死信队列 |
 | [docs/DAY10_API.md](docs/DAY10_API.md) | Day 10 FastAPI REST 接口（含语义搜索 + 任务面板） |
 | [docs/DAY11_FRONTEND.md](docs/DAY11_FRONTEND.md) | Day 11 Next.js 前端骨架（三栏 + 搜索 + 管理） |
+| [docs/DAY12_POLISH.md](docs/DAY12_POLISH.md) | Day 12 数据填充 + SSR + URL 状态化 + 性能 bench |
 | [web/README.md](web/README.md) | 前端独立 README |
 
 ## 快速开始（Day 1）
@@ -57,4 +58,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 9：Celery 批量化 + 列表页爬虫 + 死信队列（`il batch` / `il dlq` / `il task-status`）
 - ✅ Day 10：FastAPI REST 接口（`il serve` + `/companies` `/posts/search` `/summaries` `/admin/*`）
 - ✅ Day 11：Next.js 前端骨架（`/`三栏 + `/search` 语义搜索 + `/admin` 任务面板）
-- 🚧 Day 12：检索体验打磨 + 真实数据填充
+- ✅ Day 12：SSR 首屏 + URL 状态化 + `il seed-demo` + `il bench-search`
+- 🚧 Day 13：跑真实数据 + prompt 调优

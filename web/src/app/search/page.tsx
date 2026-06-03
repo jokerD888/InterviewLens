@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { Loader2 } from "lucide-react";
 import { QuestionCard } from "@/components/question-card";
@@ -8,11 +9,27 @@ import { SearchBar } from "@/components/search-bar";
 import { fetcher, type Question } from "@/lib/api";
 
 export default function SearchPage() {
-  const [q, setQ] = useState("");
-  const [submitted, setSubmitted] = useState("");
-  const [company, setCompany] = useState("");
-  const [position, setPosition] = useState("");
+  const router = useRouter();
+  const search = useSearchParams();
+  const initialQ = search.get("q") ?? "";
+  const initialCompany = search.get("company") ?? "";
+  const initialPosition = search.get("position") ?? "";
+
+  const [submitted, setSubmitted] = useState(initialQ);
+  const [company, setCompany] = useState(initialCompany);
+  const [position, setPosition] = useState(initialPosition);
   const [minQuality, setMinQuality] = useState(0);
+
+  // Mirror state -> URL
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    if (submitted) sp.set("q", submitted);
+    if (company) sp.set("company", company);
+    if (position) sp.set("position", position);
+    if (minQuality > 0) sp.set("min_quality", String(minQuality));
+    const qs = sp.toString();
+    router.replace(`/search${qs ? "?" + qs : ""}`, { scroll: false });
+  }, [submitted, company, position, minQuality, router]);
 
   const url =
     submitted.trim().length >= 2
@@ -29,14 +46,8 @@ export default function SearchPage() {
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-4 p-4">
-      <SearchBar
-        initial={q}
-        onSubmit={(v) => {
-          setQ(v);
-          setSubmitted(v);
-        }}
-      />
-      <div className="flex flex-wrap gap-2 text-xs">
+      <SearchBar initial={submitted} onSubmit={setSubmitted} />
+      <div className="flex flex-wrap items-center gap-2 text-xs">
         <Filter label="公司" value={company} placeholder="字节跳动" onChange={setCompany} />
         <Filter label="岗位" value={position} placeholder="后端开发" onChange={setPosition} />
         <Filter
@@ -46,6 +57,7 @@ export default function SearchPage() {
           onChange={(v) => setMinQuality(Number(v) || 0)}
           width="w-20"
         />
+        <ExampleQueries onPick={setSubmitted} />
       </div>
 
       {!submitted && (
@@ -96,5 +108,23 @@ function Filter({
         className={`bg-transparent outline-none placeholder:text-muted/60 ${width ?? "w-32"}`}
       />
     </label>
+  );
+}
+
+function ExampleQueries({ onPick }: { onPick: (q: string) => void }) {
+  const examples = ["分布式锁", "Redis 持久化", "MySQL 索引", "JVM GC", "Transformer"];
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="text-muted">示例：</span>
+      {examples.map((e) => (
+        <button
+          key={e}
+          onClick={() => onPick(e)}
+          className="rounded-full border border-border px-2 py-0.5 hover:border-accent hover:text-accent"
+        >
+          {e}
+        </button>
+      ))}
+    </div>
   );
 }

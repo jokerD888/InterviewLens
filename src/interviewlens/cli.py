@@ -929,6 +929,89 @@ def dlq(
         raise typer.Exit(code=1)
 
 
+# ----------------------------------------------------------------- seed-demo
+@app.command(name="seed-demo")
+def seed_demo_cmd() -> None:
+    """Insert deterministic demo data so the UI is demoable without crawling."""
+    from .seed_demo import seed_demo
+
+    async def _run() -> None:
+        counts = await seed_demo()
+        meta = Table(title="demo seed", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        for k, v in counts.items():
+            meta.add_row(k, str(v))
+        console.print(meta)
+        console.print(
+            Panel(
+                "Demo data inserted. Try:\n  uv run il serve  &\n  cd web && pnpm dev\n  open http://localhost:3000",
+                title="next",
+                border_style="green",
+            )
+        )
+
+    asyncio.run(_run())
+
+
+# --------------------------------------------------------------- bench-search
+@app.command(name="bench-search")
+def bench_search(
+    queries: str = typer.Option(
+        "分布式锁,Redis 持久化,JVM GC,TCP 三次握手,Transformer attention",
+        help="comma-separated queries",
+    ),
+    limit: int = typer.Option(10),
+    repeat: int = typer.Option(3),
+) -> None:
+    """Time pgvector search across a list of queries (embed + retrieval p50)."""
+    import time
+
+    from .embedding import embed_texts
+
+    async def _run() -> None:
+        from sqlalchemy import text as sa_text
+
+        qs = [q.strip() for q in queries.split(",") if q.strip()]
+        table = Table(title=f"bench-search · {len(qs)} queries × {repeat} runs")
+        table.add_column("query", style="cyan")
+        table.add_column("emb ms")
+        table.add_column("p50 ms")
+        table.add_column("hits")
+
+        for q in qs:
+            t0 = time.perf_counter()
+            qvec = await embed_texts([q])
+            emb_ms = (time.perf_counter() - t0) * 1000
+            vec_str = "[" + ",".join(f"{v:.6f}" for v in qvec[0].tolist()) + "]"
+
+            sample_times: list[float] = []
+            hits = 0
+            async with session_scope() as s:
+                for _ in range(repeat):
+                    t0 = time.perf_counter()
+                    res = (
+                        await s.execute(
+                            sa_text(
+                                "SELECT q.id FROM questions q "
+                                "WHERE q.embedding IS NOT NULL "
+                                "ORDER BY q.embedding <=> CAST(:vec AS vector) LIMIT :lim"
+                            ),
+                            {"vec": vec_str, "lim": limit},
+                        )
+                    ).all()
+                    sample_times.append((time.perf_counter() - t0) * 1000)
+                    hits = len(res)
+
+            sample_times.sort()
+            p50 = sample_times[len(sample_times) // 2]
+            table.add_row(q, f"{emb_ms:.1f}", f"{p50:.1f}", str(hits))
+
+        console.print(table)
+
+    asyncio.run(_run())
+
+
 # ----------------------------------------------------------------- serve
 @app.command()
 def serve(
