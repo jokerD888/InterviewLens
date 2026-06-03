@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: theme(colors.bg);
+  color: theme(colors.ink);
+  font-family: theme(fontFamily.sans);
+}
+
+::selection {
+  background: theme(colors.accent / 30%);
+}
+
+/* Scrollbar */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: theme(colors.border);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: theme(colors.muted);
+}
+
+/* Markdown reset */
+.prose-il h1,
+.prose-il h2,
+.prose-il h3 {
+  color: theme(colors.ink);
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+.prose-il h2 {
+  font-size: 1.1rem;
+  border-bottom: 1px solid theme(colors.border);
+  padding-bottom: 0.25rem;
+}
+.prose-il h3 {
+  font-size: 1rem;
+}
+.prose-il p {
+  margin-bottom: 0.5rem;
+  line-height: 1.65;
+}
+.prose-il blockquote {
+  border-left: 3px solid theme(colors.accent);
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+  color: theme(colors.muted);
+  font-style: italic;
+}
+.prose-il code {
+  background: theme(colors.panel);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.prose-il ul,
+.prose-il ol {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+.prose-il li {
+  margin: 0.25rem 0;
+}
+.prose-il a {
+  color: theme(colors.accent);
+  text-decoration: underline;
+}

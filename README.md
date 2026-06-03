@@ -19,6 +19,8 @@
 | [docs/DAY8_AGGREGATOR.md](docs/DAY8_AGGREGATOR.md) | Day 8 RAG 分桶摘要 + embedding 回填（闭环！） |
 | [docs/DAY9_CELERY.md](docs/DAY9_CELERY.md) | Day 9 Celery 批量化 + 列表页爬虫 + 死信队列 |
 | [docs/DAY10_API.md](docs/DAY10_API.md) | Day 10 FastAPI REST 接口（含语义搜索 + 任务面板） |
+| [docs/DAY11_FRONTEND.md](docs/DAY11_FRONTEND.md) | Day 11 Next.js 前端骨架（三栏 + 搜索 + 管理） |
+| [web/README.md](web/README.md) | 前端独立 README |
 
 ## 快速开始（Day 1）
 
@@ -54,4 +56,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 8：Aggregator + embedding 回填（`il backfill-embeddings` / `il aggregate` / `il show-summary`）— **核心闭环完成**
 - ✅ Day 9：Celery 批量化 + 列表页爬虫 + 死信队列（`il batch` / `il dlq` / `il task-status`）
 - ✅ Day 10：FastAPI REST 接口（`il serve` + `/companies` `/posts/search` `/summaries` `/admin/*`）
-- 🚧 Day 11：Next.js 前端骨架
+- ✅ Day 11：Next.js 前端骨架（`/`三栏 + `/search` 语义搜索 + `/admin` 任务面板）
+- 🚧 Day 12：检索体验打磨 + 真实数据填充
