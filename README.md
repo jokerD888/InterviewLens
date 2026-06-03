@@ -21,6 +21,8 @@
 | [docs/DAY10_API.md](docs/DAY10_API.md) | Day 10 FastAPI REST 接口（含语义搜索 + 任务面板） |
 | [docs/DAY11_FRONTEND.md](docs/DAY11_FRONTEND.md) | Day 11 Next.js 前端骨架（三栏 + 搜索 + 管理） |
 | [docs/DAY12_POLISH.md](docs/DAY12_POLISH.md) | Day 12 数据填充 + SSR + URL 状态化 + 性能 bench |
+| [docs/DAY13_INGESTION_TUNING.md](docs/DAY13_INGESTION_TUNING.md) | Day 13 真实数据填充 + Prompt A/B + Scorer 调优 |
+| [docs/DAY14_RESUME_AND_RELEASE.md](docs/DAY14_RESUME_AND_RELEASE.md) | Day 14 简历化收尾 + 演示 GIF + tag v0.1.0 + 部署 |
 | [web/README.md](web/README.md) | 前端独立 README |
 
 ## 快速开始（Day 1）
@@ -59,4 +61,5 @@ Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V3 · bge-m3 · Postgre
 - ✅ Day 10：FastAPI REST 接口（`il serve` + `/companies` `/posts/search` `/summaries` `/admin/*`）
 - ✅ Day 11：Next.js 前端骨架（`/`三栏 + `/search` 语义搜索 + `/admin` 任务面板）
 - ✅ Day 12：SSR 首屏 + URL 状态化 + `il seed-demo` + `il bench-search`
-- 🚧 Day 13：跑真实数据 + prompt 调优
+- 📝 Day 13（文档已就绪）：真实数据填充 + Prompt A/B + Scorer 调优
+- 📝 Day 14（文档已就绪）：简历化收尾 + 演示 GIF + tag v0.1.0 + 部署
