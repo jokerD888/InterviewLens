@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { fetcher, type Position } from "@/lib/api";
+import { fetcher, paths } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 type Props = {
@@ -11,20 +11,21 @@ type Props = {
 };
 
 export function PositionFilter({ companyId, selected, onSelect }: Props) {
-  // When a company is picked we go through /companies/{id}/positions.
-  // Otherwise show the global /positions list.
-  const url = companyId
-    ? `/companies/${companyId}/positions`
-    : "/positions?with_counts=true&limit=200";
+  // Company picked → its scoped positions; otherwise the global list.
+  const url = companyId ? paths.companyPositions(companyId) : paths.positions();
   const { data, isLoading } = useSWR<unknown[]>(url, fetcher);
 
   if (isLoading) {
-    return <div className="h-8 animate-pulse rounded bg-panel/60" />;
+    return <div className="h-7 w-64 animate-pulse rounded-full bg-sunk/70" />;
   }
-  const items = (data ?? []) as { position_name?: string; canonical?: string; post_count: number | null }[];
+  const items = (data ?? []) as {
+    position_name?: string;
+    canonical?: string;
+    post_count: number | null;
+  }[];
 
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <Chip active={!selected} onClick={() => onSelect(null)}>
         全部岗位
       </Chip>
@@ -60,14 +61,16 @@ function Chip({
     <button
       onClick={onClick}
       className={cn(
-        "rounded-full border px-2.5 py-0.5 text-xs transition",
+        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-wide transition",
         active
-          ? "border-accent bg-accent/10 text-accent"
-          : "border-border bg-panel text-muted hover:text-ink",
+          ? "border-accent bg-accent text-bg shadow-sm"
+          : "border-rule/60 bg-transparent text-muted hover:border-ink hover:text-ink",
       )}
     >
       {children}
-      {count != null && <span className="ml-1.5 opacity-60">{count}</span>}
+      {count != null && (
+        <span className={cn("tabular-nums", active ? "text-bg/75" : "opacity-55")}>{count}</span>
+      )}
     </button>
   );
 }

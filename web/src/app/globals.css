@@ -3,21 +3,44 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
 body {
   background: theme(colors.bg);
   color: theme(colors.ink);
-  font-family: theme(fontFamily.sans);
+  font-family: theme(fontFamily.serif);
+}
+
+/* Paper grain — a faint multi-stop noise so large fills aren't dead-flat.
+   Pure CSS, no asset. Sits under all content via body::before. */
+body {
+  position: relative;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(hsl(30 18% 70% / 0.16) 1px, transparent 1px),
+    radial-gradient(hsl(30 18% 70% / 0.1) 1px, transparent 1px);
+  background-size:
+    3px 3px,
+    7px 7px;
+  background-position:
+    0 0,
+    1px 2px;
 }
 
 ::selection {
-  background: theme(colors.accent / 30%);
+  background: theme(colors.accent / 22%);
+  color: theme(colors.ink);
 }
 
-/* Scrollbar */
+/* Scrollbar — slim, paper-toned */
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -26,56 +49,145 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: theme(colors.border);
+  background: theme(colors.rule);
+  border: 3px solid theme(colors.bg);
   border-radius: 8px;
 }
 *::-webkit-scrollbar-thumb:hover {
   background: theme(colors.muted);
 }
 
-/* Markdown reset */
+/* ---- Staggered page-load reveal -------------------------------------- */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.rise-1 {
+  animation-delay: 0.04s;
+}
+.rise-2 {
+  animation-delay: 0.1s;
+}
+.rise-3 {
+  animation-delay: 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .rise-1,
+  .rise-2,
+  .rise-3 {
+    animation: none;
+  }
+}
+
+/* ---- Editorial markdown (summary article) ---------------------------- */
+.prose-il {
+  font-family: theme(fontFamily.serif);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: theme(colors.ink);
+}
 .prose-il h1,
 .prose-il h2,
 .prose-il h3 {
+  font-family: theme(fontFamily.display);
   color: theme(colors.ink);
   font-weight: 600;
-  margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+  margin-top: 1.75rem;
+  margin-bottom: 0.6rem;
 }
 .prose-il h2 {
-  font-size: 1.1rem;
+  font-size: 1.35rem;
+  padding-bottom: 0.3rem;
   border-bottom: 1px solid theme(colors.border);
-  padding-bottom: 0.25rem;
 }
 .prose-il h3 {
-  font-size: 1rem;
+  font-size: 1.12rem;
+  color: theme(colors.accent-ink);
 }
 .prose-il p {
-  margin-bottom: 0.5rem;
-  line-height: 1.65;
+  margin-bottom: 0.7rem;
 }
 .prose-il blockquote {
   border-left: 3px solid theme(colors.accent);
-  padding-left: 0.75rem;
-  margin: 0.5rem 0;
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  margin: 0.8rem 0;
   color: theme(colors.muted);
   font-style: italic;
 }
 .prose-il code {
-  background: theme(colors.panel);
-  padding: 0.1rem 0.3rem;
-  border-radius: 4px;
-  font-size: 0.85em;
+  font-family: theme(fontFamily.mono);
+  background: theme(colors.sunk);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.82em;
+}
+.prose-il pre {
+  background: theme(colors.sunk);
+  border: 1px solid theme(colors.border);
+  border-radius: 6px;
+  padding: 0.9rem;
+  overflow-x: auto;
+  margin: 0.8rem 0;
+}
+.prose-il pre code {
+  background: transparent;
+  padding: 0;
 }
 .prose-il ul,
 .prose-il ol {
-  padding-left: 1.5rem;
-  margin: 0.5rem 0;
+  padding-left: 1.4rem;
+  margin: 0.6rem 0;
+}
+.prose-il ul {
+  list-style: none;
+}
+.prose-il ul li {
+  position: relative;
+}
+.prose-il ul li::before {
+  content: "—";
+  position: absolute;
+  left: -1.3rem;
+  color: theme(colors.accent);
+}
+.prose-il ol {
+  list-style: decimal;
 }
 .prose-il li {
-  margin: 0.25rem 0;
+  margin: 0.3rem 0;
 }
 .prose-il a {
-  color: theme(colors.accent);
+  color: theme(colors.accent-ink);
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-il table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0;
+  font-size: 0.95em;
+}
+.prose-il th,
+.prose-il td {
+  border: 1px solid theme(colors.border);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+.prose-il th {
+  background: theme(colors.panel);
+  font-family: theme(fontFamily.mono);
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
