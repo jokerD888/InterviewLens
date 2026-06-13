@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from sqlalchemy import text
+from sqlalchemy import text, update as sa_update
 from sqlmodel import select
 
 from .config import PROJECT_ROOT, settings
@@ -147,6 +147,60 @@ def seed_aliases() -> None:
         console.print(f"[green]Seeded[/green] {json.dumps(added)}")
 
     asyncio.run(_run())
+
+
+# ------------------------------------------------------------------ reset
+@app.command()
+def reset(
+    full: bool = typer.Option(False, "--full", help="Also delete all crawled posts (hard reset)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Reset pipeline state. Default: keep crawled posts, clear AI results.
+
+    Use --full to also wipe all posts (start from scratch).
+    """
+    if not yes:
+        msg = (
+            "[red]DELETE ALL posts, questions, summaries, and aliases[/red]"
+            if full
+            else "Clear AI results (questions/summaries/aliases) but [green]KEEP[/green] crawled posts"
+        )
+        confirmed = typer.confirm(f"{msg}. Continue?", default=False)
+        if not confirmed:
+            console.print("[yellow]cancelled[/yellow]")
+            raise typer.Exit(code=0)
+
+    async def _run() -> None:
+        async with session_scope() as s:
+            await s.execute(text("DELETE FROM questions"))
+            await s.execute(text("DELETE FROM summaries"))
+            await s.execute(text("DELETE FROM alias_dict"))
+            await s.execute(text("ALTER SEQUENCE IF EXISTS questions_id_seq RESTART WITH 1"))
+            await s.execute(text("ALTER SEQUENCE IF EXISTS summaries_id_seq RESTART WITH 1"))
+            await s.execute(text("ALTER SEQUENCE IF EXISTS alias_dict_id_seq RESTART WITH 1"))
+
+            if full:
+                await s.execute(text("DELETE FROM post_company_position"))
+                await s.execute(text("DELETE FROM posts"))
+                await s.execute(text("ALTER SEQUENCE IF EXISTS posts_id_seq RESTART WITH 1"))
+            else:
+                await s.execute(
+                    sa_update(Post).values(
+                        extract_status="pending",
+                        extract_error=None,
+                        extract_version=0,
+                        quality_score=None,
+                    )
+                )
+
+            await s.commit()
+
+        console.print("[green]reset complete[/green]")
+
+    asyncio.run(_run())
+
+    # Re-seed aliases after any reset
+    seed_aliases()
 
 
 # ----------------------------------------------------------------- crawl
@@ -562,8 +616,6 @@ def rescore(
     rescore_all: bool = typer.Option(False, "--all", help="Ignore post_id, rescore every post with extracted data"),
 ) -> None:
     """Recompute Scorer output from existing questions table (no LLM call)."""
-    from sqlalchemy import update as sa_update
-
     from .db import Question
     from .scoring import score_extracted
 

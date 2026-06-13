@@ -1,6 +1,25 @@
+# ============================================================
+# InterviewLens · 全栈 Docker Compose
+# ============================================================
+# 一键启动：
+#   docker compose up -d              # 基础服务 + API + Worker + Web
+#   docker compose up -d --build      # 强制重新构建
+#   docker compose up -d postgres redis langfuse  # 仅基础设施
+#   docker compose run --rm api uv run il doctor   # 健康检查
+#   docker compose run --rm api uv run il seed-aliases  # 灌入种子别名
+#
+# 首次启动后（等待 api healthy）：
+#   docker compose exec api uv run il seed-aliases
+#   docker compose exec api uv run il seed-demo
+# ============================================================
+
 version: "3.9"
 
 services:
+  # ==============================================================
+  # 基础设施
+  # ==============================================================
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: il-postgres
@@ -10,12 +29,16 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-il_pass}
       POSTGRES_DB: ${POSTGRES_DB:-interviewlens}
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - il_pg_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-il} -d ${POSTGRES_DB:-interviewlens}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-il} -d ${POSTGRES_DB:-interviewlens}",
+        ]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,7 +48,7 @@ services:
     container_name: il-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6380}:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - il_redis_data:/data
     command: ["redis-server", "--appendonly", "yes"]
@@ -69,7 +92,102 @@ services:
       LANGFUSE_INIT_ORG_ID: il-org
       LANGFUSE_INIT_PROJECT_ID: il-project
 
+  # ==============================================================
+  # 应用服务
+  # ==============================================================
+
+  api:
+    build: .
+    container_name: il-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    shm_size: "2gb"
+    env_file:
+      - .env
+    environment:
+      # --- 容器内地址覆盖（env_file 中的 localhost 值不适用） ---
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-il}:${POSTGRES_PASSWORD:-il_pass}@postgres:5432/${POSTGRES_DB:-interviewlens}
+      DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-il}:${POSTGRES_PASSWORD:-il_pass}@postgres:5432/${POSTGRES_DB:-interviewlens}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      LANGFUSE_HOST: http://langfuse:3000
+      HF_HOME: /app/.cache/huggingface
+    volumes:
+      - il_hf_cache:/app/.cache/huggingface
+    command:
+      [
+        "uv",
+        "run",
+        "uvicorn",
+        "interviewlens.api.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  worker:
+    build: .
+    container_name: il-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    shm_size: "2gb"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-il}:${POSTGRES_PASSWORD:-il_pass}@postgres:5432/${POSTGRES_DB:-interviewlens}
+      DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER:-il}:${POSTGRES_PASSWORD:-il_pass}@postgres:5432/${POSTGRES_DB:-interviewlens}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      LANGFUSE_HOST: http://langfuse:3000
+      HF_HOME: /app/.cache/huggingface
+    volumes:
+      - il_hf_cache:/app/.cache/huggingface
+    command:
+      [
+        "uv",
+        "run",
+        "celery",
+        "-A",
+        "interviewlens.tasks.celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=2",
+      ]
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_BASE: http://api:8000
+    container_name: il-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
 volumes:
   il_pg_data:
   il_redis_data:
   il_langfuse_db:
+  il_hf_cache:
