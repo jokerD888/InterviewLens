@@ -12,7 +12,7 @@ from sqlalchemy import update
 from sqlmodel import select
 
 from ..db import Question, session_scope
-from ..embedding import embed_texts
+from .bge_m3 import embed_texts
 from ..logging import log
 
 

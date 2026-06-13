@@ -44,14 +44,15 @@ def _extract_urls(html: str, base: str) -> list[str]:
 
 async def discover_from_listing(
     *,
-    category: str = "experience",
+    source: str = "experience",
     pages: int = 1,
     fetcher: NowcoderFetcher | None = None,
 ) -> list[str]:
     """Walk N listing pages and return collected discussion URLs.
 
-    ``category`` is appended to the listing path for forward-compat. The default
-    fetches the generic ``/discuss?type=2`` (experience) listing.
+    ``source`` selects the listing page:
+      - "experience"   → /discuss?type=2&order=3 (讨论区面经)
+      - "interview"    → /?type=818_1 (面经专区)
     """
     own_fetcher = fetcher is None
     if own_fetcher:
@@ -63,7 +64,10 @@ async def discover_from_listing(
     urls: dict[str, None] = {}
     try:
         for page in range(1, pages + 1):
-            url = f"{base}/discuss?type=2&order=3&pageSize=30&page={page}"
+            if source == "interview":
+                url = f"{base}/?type=818_1&page={page}"
+            else:
+                url = f"{base}/discuss?type=2&order=3&pageSize=30&page={page}"
             result = await fetcher.fetch(url)
             for u in _extract_urls(result.html, base):
                 urls[u] = None

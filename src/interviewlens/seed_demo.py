@@ -25,7 +25,7 @@ from .db import (
 )
 from .logging import log
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 
 DEMO_COMPANIES = [
     ("字节跳动", "互联网"),

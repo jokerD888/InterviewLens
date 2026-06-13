@@ -107,6 +107,7 @@ async def call_tool(
                 tool_choice=tool_choice,  # type: ignore[arg-type]
                 temperature=local_temp,
                 max_tokens=max_tokens,
+                extra_body={"thinking": {"type": "disabled"}},
             )
 
             choice = resp.choices[0]

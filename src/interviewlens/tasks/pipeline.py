@@ -97,7 +97,7 @@ def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
 # --------------------------------------------------------------- enqueue_listing
 
 @celery_app.task(name="il.enqueue_listing")
-def enqueue_listing(pages: int = 1, skip_normalize: bool = False) -> dict:
+def enqueue_listing(pages: int = 1, source: str = "experience", skip_normalize: bool = False) -> dict:
     """Discover URLs from listing pages and dispatch ``crawl_url`` per item."""
     from ..crawler import NowcoderFetcher, discover_from_listing
 
@@ -105,7 +105,7 @@ def enqueue_listing(pages: int = 1, skip_normalize: bool = False) -> dict:
         fetcher = NowcoderFetcher()
         await fetcher.start()
         try:
-            return await discover_from_listing(pages=pages, fetcher=fetcher)
+            return await discover_from_listing(source=source, pages=pages, fetcher=fetcher)
         finally:
             await fetcher.stop()
 

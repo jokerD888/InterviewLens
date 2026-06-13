@@ -687,14 +687,14 @@ def top_posts(
         table = Table(title=f"top {len(rows)} posts" + (f" · {company}" if company else "") + (f" · {position}" if position else ""))
         table.add_column("id")
         table.add_column("score")
-        table.add_column("posted_at")
         table.add_column("title")
+        table.add_column("url")
         for r in rows:
             table.add_row(
                 str(r[0]),
                 str(r[2]),
-                str(r[3]) if r[3] else "",
                 (r[1] or "")[:60],
+                str(r[4] or ""),
             )
         console.print(table)
 
@@ -836,6 +836,7 @@ def show_summary(
 @app.command()
 def batch(
     pages: int = typer.Option(1, help="How many listing pages to scan"),
+    source: str = typer.Option("interview", help="experience | interview"),
     skip_normalize: bool = typer.Option(False, "--skip-normalize"),
     inline: bool = typer.Option(False, "--inline", help="Run synchronously without Celery (debug)"),
 ) -> None:
@@ -848,7 +849,7 @@ def batch(
         fetcher = NowcoderFetcher()
         await fetcher.start()
         try:
-            urls = await discover_from_listing(pages=pages, fetcher=fetcher)
+            urls = await discover_from_listing(source=source, pages=pages, fetcher=fetcher)
             log.info("inline.discovered", n=len(urls))
             for u in urls:
                 try:
@@ -865,7 +866,7 @@ def batch(
 
     from .tasks import enqueue_listing
 
-    result = enqueue_listing.delay(pages, skip_normalize)
+    result = enqueue_listing.delay(pages, source, skip_normalize)
     console.print(
         Panel(
             f"task_id: {result.id}\nuse `il task-status {result.id}` or watch worker logs",

@@ -145,6 +145,13 @@ class NowcoderFetcher:
             await page.wait_for_load_state("networkidle", timeout=10_000)
             html = await page.content()
             title = await page.title()
+            # Try to extract a more meaningful title for Nowcoder pages
+            try:
+                h1 = await page.locator("h1").first.text_content(timeout=2000)
+                if h1 and len(h1.strip()) > 5:
+                    title = h1.strip()
+            except Exception:
+                pass
             final_url = page.url
             log.info("fetch.done", url=url, final_url=final_url, status=status, bytes=len(html))
             return FetchResult(

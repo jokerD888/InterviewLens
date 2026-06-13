@@ -11,8 +11,9 @@ from ..db import (
     replace_questions,
     session_scope,
 )
-from ..llm import extract_from_text, get_extractor_prompt_version
-from ..llm.schema import ExtractedPost
+from .extractor import extract_from_text
+from .prompts import get_extractor_prompt_version
+from .schema import ExtractedPost
 from ..logging import log
 
 

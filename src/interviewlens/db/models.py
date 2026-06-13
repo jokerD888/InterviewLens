@@ -1,12 +1,16 @@
 """SQLModel ORM definitions, mirrored against sql/001_init.sql."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Index
+from sqlalchemy import Column, Index, func
 from sqlmodel import Field, SQLModel
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Company(SQLModel, table=True):
@@ -15,7 +19,7 @@ class Company(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     canonical: str = Field(unique=True, index=True)
     industry: str | None = None
-    created_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
 class Position(SQLModel, table=True):
@@ -25,7 +29,7 @@ class Position(SQLModel, table=True):
     canonical: str = Field(unique=True, index=True)
     category: str | None = None
     level: str | None = None
-    created_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
 class Post(SQLModel, table=True):
@@ -37,7 +41,7 @@ class Post(SQLModel, table=True):
     raw_html: str | None = None
     cleaned_text: str | None = None
     posted_at: datetime | None = None
-    fetched_at: datetime | None = None
+    fetched_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
     quality_score: int | None = None
     extract_status: str = Field(default="pending", index=True)
     extract_error: str | None = None
@@ -66,7 +70,7 @@ class Question(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(1024), nullable=True),
     )
-    created_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
 class Summary(SQLModel, table=True):
@@ -81,7 +85,7 @@ class Summary(SQLModel, table=True):
     period: str
     content_md: str
     sample_count: int = 0
-    updated_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
 class AliasDict(SQLModel, table=True):
@@ -95,4 +99,4 @@ class AliasDict(SQLModel, table=True):
     alias: str
     canonical_id: int
     confidence: float = 1.0
-    learned_at: datetime | None = None
+    learned_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})

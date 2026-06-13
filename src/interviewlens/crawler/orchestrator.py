@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..crawler import NowcoderFetcher, clean_html
+from .playwright_runner import NowcoderFetcher
+from .cleaner import clean_html
 from ..db import (
     mark_extract_status,
     session_scope,

@@ -28,7 +28,7 @@ async def upsert_raw_post(
     Returns the Post row (already flushed, with id populated).
     """
     existing = await get_post_by_url(session, url)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     if existing is None:
         post = Post(
             source_url=url,
@@ -45,8 +45,10 @@ async def upsert_raw_post(
     existing.raw_html = raw_html
     existing.title = title or existing.title
     existing.fetched_at = now
-    existing.extract_status = "pending"
-    existing.extract_error = None
+    # Only reset status for posts that weren't successfully extracted before
+    if existing.extract_status not in ("done",):
+        existing.extract_status = "pending"
+        existing.extract_error = None
     await session.flush()
     return existing
 

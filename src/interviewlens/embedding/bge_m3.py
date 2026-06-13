@@ -3,8 +3,7 @@
 Why bge-m3:
 - Best Chinese+English bilingual model in the public domain (2024-2025).
 - 1024-dim, matches our pgvector schema and HNSW index.
-- CPU-runnable in fp32; for low-memory boxes set EMBEDDING_DEVICE=cpu and
-  the model auto-falls back. GPU acceleration is automatic when CUDA visible.
+- Auto-detects GPU (CUDA) with CPU fallback when EMBEDDING_DEVICE=auto.
 """
 from __future__ import annotations
 
@@ -20,6 +19,34 @@ _model = None
 _load_lock = asyncio.Lock()
 
 
+def _resolve_device() -> str:
+    """Auto-detect or honour explicit device setting."""
+    wanted = settings.embedding_device
+    if wanted == "cpu":
+        return "cpu"
+    if wanted == "cuda":
+        try:
+            import torch  # noqa: WPS433
+        except ImportError:
+            log.warning("embed.no_torch", fallback="cpu")
+            return "cpu"
+        if torch.cuda.is_available():
+            log.info("embed.cuda_detected", gpu=torch.cuda.get_device_name(0))
+            return "cuda"
+        log.warning("embed.cuda_unavailable", fallback="cpu")
+        return "cpu"
+    # "auto" or anything else: detect
+    try:
+        import torch  # noqa: WPS433
+    except ImportError:
+        return "cpu"
+    if torch.cuda.is_available():
+        log.info("embed.cuda_detected", gpu=torch.cuda.get_device_name(0))
+        return "cuda"
+    log.info("embed.cpu_fallback")
+    return "cpu"
+
+
 async def get_model():
     """Lazy import sentence-transformers + load model (cached forever)."""
     global _model
@@ -28,14 +55,14 @@ async def get_model():
     async with _load_lock:
         if _model is not None:
             return _model
-        log.info("embed.loading", model=settings.embedding_model, device=settings.embedding_device)
+        device = _resolve_device()
+        log.info("embed.loading", model=settings.embedding_model, device=device)
         from sentence_transformers import SentenceTransformer  # noqa: WPS433
 
-        # Run blocking load in thread to keep the event loop responsive.
         def _do_load():
             return SentenceTransformer(
                 settings.embedding_model,
-                device=settings.embedding_device,
+                device=device,
             )
 
         _model = await asyncio.to_thread(_do_load)

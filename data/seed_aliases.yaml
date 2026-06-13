@@ -53,6 +53,22 @@ company:
     aliases: [DJI, 大疆创新]
   - canonical: 携程
     aliases: [Ctrip, Trip.com]
+  - canonical: 小红书
+    aliases: [Xiaohongshu, RED, 红薯]
+  - canonical: 得物
+    aliases: [Dewu, Poizon]
+  - canonical: 蔚来
+    aliases: [NIO, Weilai]
+  - canonical: 理想汽车
+    aliases: [Li Auto, Lixiang, 理想]
+  - canonical: 米哈游
+    aliases: [miHoYo, Hoyoverse, 原神, 崩铁]
+  - canonical: 饿了么
+    aliases: [Ele.me, 饿了么星选]
+  - canonical: Shopee
+    aliases: [虾皮, 虾皮购物]
+  - canonical: Shein
+    aliases: [希音]
 
 position:
   - canonical: 后端开发
@@ -81,3 +97,7 @@ position:
     aliases: [安全, 信息安全, 网络安全]
   - canonical: 产品经理
     aliases: [PM, 产品]
+  - canonical: 游戏客户端
+    aliases: [游戏开发, UE4, UE5, Unity, Unreal, 游戏引擎]
+  - canonical: 量化开发
+    aliases: [量化研究员, 量化交易, Quant, 量化策略]

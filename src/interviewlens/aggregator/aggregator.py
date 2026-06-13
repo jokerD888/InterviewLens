@@ -84,7 +84,7 @@ async def _fetch_candidate_questions(
           AND po.extract_status = 'done'
           AND COALESCE(po.quality_score, 0) >= :min_q
           AND (
-              :period IS NULL
+              CAST(:period AS TEXT) IS NULL
               OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
           )
     )
@@ -297,7 +297,7 @@ async def aggregate_one(
                     )
                 )
             ).scalar_one_or_none()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             if existing is None:
                 session.add(
                     Summary(
