@@ -1,0 +1,29 @@
+# ============================================================
+# Development override: mount source as volume for hot-reload
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ============================================================
+
+services:
+  api:
+    volumes:
+      - ./src:/app/src:ro
+      - il_hf_cache:/app/.cache/huggingface
+    command:
+      [
+        "uv",
+        "run",
+        "uvicorn",
+        "interviewlens.api.app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
+
+  worker:
+    volumes:
+      - ./src:/app/src:ro
+      - il_hf_cache:/app/.cache/huggingface

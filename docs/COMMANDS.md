@@ -7,12 +7,69 @@
 
 ## 目录
 
+- [🚀 一键命令专区（普通用户看这里）](#-一键命令专区普通用户看这里)
 - [环境准备](#环境准备)
 - [单篇调试](#单篇调试)
 - [批量生产](#批量生产)
 - [数据管理](#数据管理)
 - [监控与排障](#监控与排障)
 - [日常增量更新](#日常增量更新)
+
+---
+
+## 🚀 一键命令专区（普通用户看这里）
+
+> **前提**：已安装 Docker Desktop，已配好 `.env`（DeepSeek Key + 牛客 Cookie）。
+> 按顺序执行下面 6 步，全栈从零到能用。
+
+### 第 1 步：启动
+
+```bash
+docker compose up -d --build
+```
+
+等待 il-api 变为 healthy（首次 3-5 分钟，模型下载需时间）。
+
+### 第 2 步：初始化
+
+```bash
+docker compose exec api uv run il seed-aliases
+```
+
+### 第 3 步：批量爬取 + AI 抽取（核心）
+
+```bash
+# 扫 3 页面经 tab → AI 过滤非面经 → 抓取内容 → LLM 抽取 → 归一 → 打分
+# --inline 表示同步跑，改 Celery 并发模式见下方详细说明
+docker compose exec api uv run il batch --pages 3 --inline
+```
+
+> 跑完后 `il resume` 可重试失败的帖子，`il dlq list` 查看死信队列。
+
+### 第 4 步：生成向量 + 摘要
+
+```bash
+docker compose exec api uv run il backfill-embeddings
+docker compose exec api uv run il aggregate
+```
+
+### 第 5 步：查看结果
+
+```bash
+# 质量排行
+docker compose exec api uv run il top-posts
+
+# 具体公司+岗位摘要
+docker compose exec api uv run il show-summary 字节跳动 后端开发 --period 2025Q2
+```
+
+### 第 6 步：打开网页
+
+```
+http://localhost:3000       → 前端（搜索 + 摘要 + 管理）
+http://localhost:8000/docs  → API 文档
+http://localhost:3001       → Langfuse 面板（Token 花费 / Trace）
+```
 
 ---
 

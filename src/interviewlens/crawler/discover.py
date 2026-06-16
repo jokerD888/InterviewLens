@@ -51,8 +51,8 @@ async def discover_from_listing(
     """Walk N listing pages and return collected discussion URLs.
 
     ``source`` selects the listing page:
-      - "experience"   → /discuss?type=2&order=3 (讨论区面经)
-      - "interview"    → /?type=818_1 (面经专区)
+      - "experience"   → /discuss?type=2&order=3 (讨论区-面经tab，推荐)
+      - "interview"    → /?type=818_1 (首页混流，含热榜)
     """
     own_fetcher = fetcher is None
     if own_fetcher:

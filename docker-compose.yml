@@ -137,7 +137,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 300s
 
   worker:
     build: .
@@ -184,7 +184,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "3013:3000"
 
 volumes:
   il_pg_data:

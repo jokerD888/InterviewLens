@@ -740,15 +740,18 @@ def top_posts(
         table.add_column("id")
         table.add_column("score")
         table.add_column("title")
-        table.add_column("url")
         for r in rows:
             table.add_row(
                 str(r[0]),
                 str(r[2]),
                 (r[1] or "")[:60],
-                str(r[4] or ""),
             )
         console.print(table)
+
+        # Print full URLs separately so they never get truncated
+        console.print("\n[bold]🔗 Full URLs:[/bold]")
+        for r in rows:
+            console.print(f"  {r[0]:>3}  [cyan]{r[4]}[/cyan]")
 
     asyncio.run(_run())
 
@@ -888,12 +891,129 @@ def show_summary(
 @app.command()
 def batch(
     pages: int = typer.Option(1, help="How many listing pages to scan"),
-    source: str = typer.Option("interview", help="experience | interview"),
+    source: str = typer.Option("mianjing", help="mianjing | api | interview | experience"),
+    job: str = typer.Option("backend", help="Job type for --source api: backend|frontend|test|ai"),
     skip_normalize: bool = typer.Option(False, "--skip-normalize"),
     inline: bool = typer.Option(False, "--inline", help="Run synchronously without Celery (debug)"),
 ) -> None:
-    """Discover URLs from Nowcoder listings and enqueue Celery tasks."""
+    """Discover URLs from Nowcoder and enqueue crawl+extract tasks.
 
+    --source mianjing (default): Playwright 面经 tab click + AI filter (recommended).
+    --source api: direct gw-c API, fast but moment-type posts only.
+    --source interview/experience: Playwright page scraping (legacy).
+    """
+
+    if source == "mianjing":
+        from .crawler.api_discover import discover_and_fetch_mianjing
+
+        async def _mianjing_inline() -> None:
+            ids = await discover_and_fetch_mianjing(pages=pages, ai_filter=True)
+            total = len(ids)
+            console.print(f"[green]面经 tab: 发现 {total} 篇（已 AI 过滤）[/green]")
+            if ids:
+                console.print("[cyan]Running extraction on new posts...[/cyan]")
+                from .agent import resume_failed
+                summaries = await resume_failed(
+                    statuses=("pending", "failed"),
+                    limit=total,
+                    use_cache=True,
+                    fetcher=None,
+                )
+                ok = sum(1 for s in summaries if not s.get("errors"))
+                console.print(f"[green]extracted {ok}/{len(summaries)} posts[/green]")
+
+        if inline:
+            asyncio.run(_mianjing_inline())
+            return
+
+        # Celery mode
+        async def _mianjing_enqueue() -> None:
+            ids = await discover_and_fetch_mianjing(pages=pages, ai_filter=True)
+            from .db import Post, session_scope
+
+            async with session_scope() as s:
+                rows = (
+                    await s.execute(
+                        select(Post.source_url)
+                        .where(Post.id.in_(ids), Post.extract_status == "pending")
+                    )
+                ).all()
+
+            from .tasks.pipeline import crawl_url
+            enqueued = 0
+            for (url,) in rows:
+                crawl_url.delay(url, skip_normalize=skip_normalize)
+                enqueued += 1
+
+            console.print(
+                Panel(
+                    f"面经 tab 完成: {len(ids)} 篇已入库（AI 过滤）.\\n"
+                    f"Extraction tasks enqueued: {enqueued}\\n"
+                    f"Watch: docker logs -f il-worker",
+                    title="mianjing",
+                    border_style="green",
+                )
+            )
+
+        asyncio.run(_mianjing_enqueue())
+        return
+
+    if source == "api":
+        from .crawler.api_discover import discover_and_fetch
+
+        async def _api_inline() -> None:
+            ids = await discover_and_fetch(job=job, pages=pages)
+            console.print(f"[green]saved {len(ids)} posts from API[/green]")
+            if ids:
+                console.print("[cyan]Running extraction on new posts...[/cyan]")
+                from .agent import resume_failed
+                fetcher = None  # API source doesn't need Playwright
+                summaries = await resume_failed(
+                    statuses=("pending", "failed"),
+                    limit=len(ids),
+                    use_cache=True,
+                    fetcher=fetcher,
+                )
+                ok = sum(1 for s in summaries if not s.get("errors"))
+                console.print(f"[green]extracted {ok}/{len(summaries)} posts[/green]")
+
+        if inline:
+            asyncio.run(_api_inline())
+            return
+
+        # Celery mode: fetch via API, then fan-out crawl_url tasks per post
+        async def _api_enqueue() -> None:
+            ids = await discover_and_fetch(job=job, pages=pages)
+            from .db import Post, session_scope
+
+            async with session_scope() as s:
+                rows = (
+                    await s.execute(
+                        select(Post.source_url)
+                        .where(Post.id.in_(ids), Post.extract_status == "pending")
+                    )
+                ).all()
+
+            from .tasks.pipeline import crawl_url
+            enqueued = 0
+            for (url,) in rows:
+                crawl_url.delay(url, skip_normalize=skip_normalize)
+                enqueued += 1
+
+            console.print(
+                Panel(
+                    f"API discovery done: {len(ids)} saved.\n"
+                    f"Extraction tasks enqueued: {enqueued}\n"
+                    f"Watch: docker logs -f il-worker",
+                    title="enqueued",
+                    border_style="green",
+                )
+            )
+
+        asyncio.run(_api_enqueue())
+        return
+
+    # ---- legacy Playwright-based sources ----
     async def _inline() -> None:
         from .crawler import NowcoderFetcher, discover_from_listing
         from .agent import run_pipeline
