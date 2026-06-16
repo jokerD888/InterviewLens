@@ -8,26 +8,27 @@ WORKDIR /app
 # ---- uv package manager ----
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# ---- Layer 1: dependencies (cached unless pyproject/uv.lock change) ----
+# ---- System deps (cache stable — before source) ----
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Layer 1: Python deps (cached unless pyproject/uv.lock change) ----
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# ---- Layer 2: source + project install ----
+# ---- Layer 2: Playwright Chromium (kept close to deps to maximise cache) ----
+RUN uv run playwright install --with-deps chromium
+
+# ---- Layer 3: source + project install (lightweight: uv sync only does "pip install -e .") ----
 COPY src/ ./src/
 COPY data/ ./data/
 COPY sql/ ./sql/
+COPY README.md ./
 RUN uv sync --frozen --no-dev
-
-# ---- Layer 3: Playwright Chromium (heavy, cache this layer) ----
-# curl needed for healthcheck; chromium needs system deps
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && uv run playwright install --with-deps chromium
 
 # ---- HuggingFace cache volume mount point ----
 ENV HF_HOME=/app/.cache/huggingface
 
 EXPOSE 8000
 
-# Default command: start FastAPI
 CMD ["uv", "run", "uvicorn", "interviewlens.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

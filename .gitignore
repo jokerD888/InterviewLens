@@ -44,3 +44,6 @@ data/cache/
 celerybeat-schedule*
 playwright-report/
 test-results/
+
+# Temp scraper / debug files
+scratch/

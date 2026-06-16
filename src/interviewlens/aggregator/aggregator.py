@@ -346,17 +346,23 @@ async def aggregate_all(
 
     log.info("aggregate.all_pairs", n=len(pairs))
     results: list[AggregateOutcome] = []
-    for c_name, p_name in pairs:
-        try:
-            outcome = await aggregate_one(
-                company=c_name,
-                position=p_name,
-                period=period,
-                top_n=top_n,
-                min_quality=min_quality,
-                write=write,
-            )
-            results.append(outcome)
-        except Exception as exc:  # noqa: BLE001
-            log.error("aggregate.pair_failed", company=c_name, position=p_name, err=str(exc))
+    sem = asyncio.Semaphore(5)  # at most 5 concurrent DeepSeek calls
+
+    async def _one(c_name: str, p_name: str) -> AggregateOutcome | None:
+        async with sem:
+            try:
+                return await aggregate_one(
+                    company=c_name,
+                    position=p_name,
+                    period=period,
+                    top_n=top_n,
+                    min_quality=min_quality,
+                    write=write,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error("aggregate.pair_failed", company=c_name, position=p_name, err=str(exc))
+                return None
+
+    gathered = await asyncio.gather(*(_one(c, p) for c, p in pairs))
+    results = [r for r in gathered if r is not None]
     return results
