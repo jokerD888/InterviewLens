@@ -3,6 +3,7 @@ embedding similarity, then ask DeepSeek to summarise into markdown.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
