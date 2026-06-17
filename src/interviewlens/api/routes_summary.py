@@ -7,7 +7,7 @@ from sqlmodel import select
 
 from ..db import Company, Position, Summary
 from .deps import get_session
-from .schemas import SummaryOut
+from .schemas import QuestionOut, SummaryOut
 
 router = APIRouter(tags=["summary"])
 
@@ -79,3 +79,59 @@ async def get_summary(
         content_md=s.content_md,
         updated_at=s.updated_at,
     )
+
+
+@router.get("/summaries/{company}/{position}/questions", response_model=list[QuestionOut])
+async def list_raw_questions(
+    company: str,
+    position: str,
+    period: str = "all",
+    session: AsyncSession = Depends(get_session),
+) -> list[QuestionOut]:
+    """Return every question (no dedup, no LLM) for this company+position."""
+    from sqlalchemy import text as sa_text
+
+    sql = sa_text("""
+        SELECT q.id, q.post_id, q.round_no, q.round_type,
+               q.content, q.category, q.answer_brief,
+               COALESCE(po.quality_score, 0) AS quality_score,
+               po.source_url
+        FROM questions q
+        JOIN posts po ON po.id = q.post_id
+        JOIN post_company_position pcp ON pcp.post_id = po.id
+        JOIN companies c ON c.id = pcp.company_id
+        JOIN positions p ON p.id = pcp.position_id
+        WHERE c.canonical = :company
+          AND p.canonical = :position
+          AND po.extract_status = 'done'
+          AND (
+              CAST(:period AS TEXT) IS NULL
+              OR CAST(:period AS TEXT) = 'all'
+              OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
+          )
+        ORDER BY q.category NULLS LAST, po.quality_score DESC NULLS LAST
+    """)
+    rows = (
+        await session.execute(
+            sql,
+            {
+                "company": company,
+                "position": position,
+                "period": period,
+            },
+        )
+    ).all()
+    return [
+        QuestionOut(
+            id=r[0],
+            post_id=r[1],
+            round_no=r[2],
+            round_type=r[3],
+            content=r[4],
+            category=r[5],
+            answer_brief=r[6],
+            quality_score=r[7],
+            source_url=r[8],
+        )
+        for r in rows
+    ]

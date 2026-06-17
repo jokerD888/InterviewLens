@@ -129,6 +129,9 @@ export const paths = {
   summary: (company: string, position: string, period = "all") =>
     `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}${qs({ period })}`,
 
+  rawQuestions: (company: string, position: string, period = "all") =>
+    `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}/questions${qs({ period })}`,
+
   health: () => `/admin/health`,
   jobs: () => `/admin/jobs`,
   metrics: () => `/admin/metrics`,
