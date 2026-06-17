@@ -192,8 +192,8 @@ body::before {
   letter-spacing: 0.05em;
 }
 .prose-il sub {
-  font-size: 0.55em;
-  color: theme(colors.muted / 0.28);
+  font-size: 0.65em;
+  color: theme(colors.muted / 0.45);
   font-weight: 300;
   vertical-align: sub;
   line-height: 0;
