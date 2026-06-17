@@ -139,12 +139,8 @@ def build_aggregator_messages(
     for i, q in enumerate(questions, 1):
         cat = q.get("category") or ""
         freq = q.get("freq") or 1
-        score = q.get("quality_score")
         prefix = f"{i:3}. [{cat}]" if cat else f"{i:3}."
-        meta = f"freq={freq}"
-        if score is not None:
-            meta += f" score={score}"
-        lines.append(f"{prefix} ({meta}) {q['content']}")
+        lines.append(f"{prefix} (freq={freq}) {q['content']}")
     questions_block = "\n".join(lines) or "(无题目)"
 
     user = (

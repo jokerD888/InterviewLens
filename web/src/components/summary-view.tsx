@@ -4,6 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 import { Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { fetcher, paths, type Summary, type Question } from "@/lib/api";
 
@@ -80,7 +81,7 @@ export function SummaryView({ company, position, period = "all" }: Props) {
 
       {/* LLM 摘要 */}
       <div className="prose-il max-w-[68ch]">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.content_md}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{data.content_md}</ReactMarkdown>
       </div>
 
       {/* ── 完整题目清单（可折叠） ── */}

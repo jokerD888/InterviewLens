@@ -10,15 +10,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "clsx": "2.1.1",
+    "lucide-react": "0.456.0",
     "next": "15.0.3",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-markdown": "9.0.1",
+    "rehype-raw": "^7.0.0",
     "remark-gfm": "4.0.0",
     "swr": "2.2.5",
-    "clsx": "2.1.1",
-    "tailwind-merge": "2.5.4",
-    "lucide-react": "0.456.0"
+    "tailwind-merge": "2.5.4"
   },
   "devDependencies": {
     "@types/node": "22.9.0",
