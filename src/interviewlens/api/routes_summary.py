@@ -93,7 +93,7 @@ async def list_raw_questions(
 
     sql = sa_text("""
         SELECT q.id, q.post_id, q.round_no, q.round_type,
-               q.content, q.category, q.answer_brief,
+               q.content, q.category, q.answer_brief, q.answer_ai,
                COALESCE(po.quality_score, 0) AS quality_score,
                po.source_url
         FROM questions q
@@ -130,8 +130,9 @@ async def list_raw_questions(
             content=r[4],
             category=r[5],
             answer_brief=r[6],
-            quality_score=r[7],
-            source_url=r[8],
+            answer_ai=r[7],
+            quality_score=r[8],
+            source_url=r[9],
         )
         for r in rows
     ]

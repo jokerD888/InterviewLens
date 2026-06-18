@@ -38,6 +38,7 @@ class QuestionOut(BaseModel):
     content: str
     category: str | None = None
     answer_brief: str | None = None
+    answer_ai: str | None = None
     quality_score: int | None = None
     source_url: str | None = None
     similarity: float | None = None

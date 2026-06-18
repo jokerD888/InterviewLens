@@ -60,7 +60,7 @@ async def search(
 
     sql = f"""
     SELECT q.id, q.post_id, q.round_no, q.round_type, q.content, q.category,
-           q.answer_brief, po.quality_score, po.source_url,
+           q.answer_brief, q.answer_ai, po.quality_score, po.source_url,
            1 - (q.embedding <=> CAST(:vec AS vector)) AS similarity
     FROM questions q
     {joins}
