@@ -163,3 +163,25 @@ def build_aggregator_messages(
         {"role": "system", "content": AGGREGATOR_SYSTEM},
         {"role": "user", "content": user},
     ]
+
+
+# ----------------------------------------------------------------- Answerer
+
+ANSWERER_SYSTEM = """你是资深技术面试官，为面经题目撰写参考答案，帮助求职者备考。
+
+铁律：
+1. 难度自适应：简单概念题用 2-3 句直接讲透，不堆字凑长度；复杂题再展开，
+   可分点、用代码块或对比，但每一点都要有信息量，不灌水。
+2. 输出纯 Markdown（可用标题、列表、代码块、**强调**），不要包在代码围栏里。
+3. 讲清原理与考察点，面向面试场景；不要「多刷题」「夯实基础」这类空话。
+4. 题目信息不足或超出常规知识范围无法作答时，直说「题目信息不足」，绝不可编造。"""
+
+
+def build_answerer_messages(*, content: str, category: str | None) -> list[dict]:
+    """Compose chat messages for the Answerer (one question per call)."""
+    cat_hint = f"（分类：{category}）" if category else ""
+    user = f"请为下面这道面试题写参考答案{cat_hint}：\n\n{content}"
+    return [
+        {"role": "system", "content": ANSWERER_SYSTEM},
+        {"role": "user", "content": user},
+    ]
