@@ -83,6 +83,35 @@ export type DlqList = {
   items: Record<string, unknown>[];
 };
 
+// Bridge types
+export type BridgeGeneratedAnswer = {
+  question_id: number;
+  content: string;
+  category: string | null;
+  generated_answer: string | null;
+  importance_score: number;
+  error: string | null;
+};
+
+export type BridgeGenerateResponse = {
+  answers: BridgeGeneratedAnswer[];
+};
+
+export type BridgeExportRequest = {
+  cards: {
+    question: string;
+    answer: string;
+    importance_score: number;
+    source_url?: string | null;
+  }[];
+};
+
+export type BridgeExportResponse = {
+  imported: number;
+  skipped: number;
+  skipped_reasons: string[];
+};
+
 const API_PREFIX = "/api";
 
 function qs(params: Record<string, string | number | null | undefined>): string {
@@ -159,5 +188,21 @@ export const mutate = {
   clearDlq: (taskName: string) =>
     http<{ cleared: number; task_name: string }>(`/admin/dlq/${encodeURIComponent(taskName)}`, {
       method: "DELETE",
+    }),
+};
+
+/** Bridge API — export questions to daily-interview-prep. */
+export const bridge = {
+  generateAnswers: (questionIds: number[]) =>
+    http<BridgeGenerateResponse>(`/bridge/generate-answers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question_ids: questionIds }),
+    }),
+  export: (cards: BridgeExportRequest["cards"]) =>
+    http<BridgeExportResponse>(`/bridge/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cards }),
     }),
 };

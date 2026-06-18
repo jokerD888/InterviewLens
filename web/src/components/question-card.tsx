@@ -11,15 +11,27 @@ type Props = {
   q: Question;
   highlight?: string;
   expandAll?: boolean;
+  selected?: boolean;
+  onToggle?: () => void;
 };
 
-export function QuestionCard({ q, highlight, expandAll }: Props) {
+export function QuestionCard({ q, highlight, expandAll, selected, onToggle }: Props) {
   const sim = q.similarity != null ? Math.round(q.similarity * 100) : null;
   const [open, setOpen] = useState(false);
 
   return (
     <article className="group border-l-2 border-border bg-panel/40 py-3 pl-4 pr-3 transition hover:border-l-accent hover:bg-panel">
       <div className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[10px] uppercase tracking-wider text-muted">
+        {onToggle && (
+          <label className="mr-1 flex items-center gap-1 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={selected ?? false}
+              onChange={onToggle}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+          </label>
+        )}
         {q.category && (
           <span className="rounded-sm bg-ink px-1.5 py-0.5 text-bg">{q.category}</span>
         )}
