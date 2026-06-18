@@ -849,6 +849,38 @@ def aggregate(
     asyncio.run(_run())
 
 
+# ---------------------------------------------------------- answer
+@app.command()
+def answer(
+    company: str | None = typer.Option(None, help="Canonical company name; omit for all"),
+    position: str | None = typer.Option(None, help="Canonical position name"),
+    limit: int | None = typer.Option(None, help="Max questions this run"),
+    min_quality: int = typer.Option(30),
+    regenerate: bool = typer.Option(False, "--regenerate", help="Ignore existing answers/version"),
+) -> None:
+    """Generate difficulty-adaptive AI answers for individual questions (offline)."""
+    from .answerer import run_answers
+
+    async def _run() -> None:
+        outcome = await run_answers(
+            company=company,
+            position=position,
+            limit=limit,
+            min_quality=min_quality,
+            regenerate=regenerate,
+        )
+        table = Table(title="answer", show_header=False)
+        table.add_column("k", style="cyan")
+        table.add_column("v")
+        table.add_row("generated", str(outcome.generated))
+        table.add_row("cache_hits", str(outcome.cache_hits))
+        table.add_row("skipped", str(outcome.skipped))
+        table.add_row("failed", str(outcome.failed))
+        console.print(table)
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------- show-summary
 @app.command(name="show-summary")
 def show_summary(
