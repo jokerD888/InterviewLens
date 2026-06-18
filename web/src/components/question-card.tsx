@@ -5,13 +5,15 @@ import useSWR from "swr";
 import { ExternalLink, Sparkles, ChevronDown, Loader2 } from "lucide-react";
 import { fetcher, paths, type Question, type PostBrief } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { AnswerBlock } from "@/components/answer-block";
 
 type Props = {
   q: Question;
   highlight?: string;
+  expandAll?: boolean;
 };
 
-export function QuestionCard({ q, highlight }: Props) {
+export function QuestionCard({ q, highlight, expandAll }: Props) {
   const sim = q.similarity != null ? Math.round(q.similarity * 100) : null;
   const [open, setOpen] = useState(false);
 
@@ -51,6 +53,8 @@ export function QuestionCard({ q, highlight }: Props) {
           <p className="mt-1.5 border-l border-border pl-3">{q.answer_brief}</p>
         </details>
       )}
+
+      <AnswerBlock answer={q.answer_ai} expandAll={expandAll} />
 
       <div className="mt-2.5 flex items-center gap-4">
         <button

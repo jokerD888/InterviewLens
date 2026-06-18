@@ -44,6 +44,7 @@ function SearchInner() {
       : null;
 
   const { data, error, isLoading } = useSWR<Question[]>(url, fetcher);
+  const [expandAll, setExpandAll] = useState<boolean | undefined>(undefined);
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-5 px-6 py-6">
@@ -86,8 +87,16 @@ function SearchInner() {
           <p className="border-b border-ink/25 pb-1 font-mono text-[11px] uppercase tracking-widest text-muted">
             <span className="tabular-nums text-ink">{data.length}</span> 条结果
           </p>
+          {data.some((q) => q.answer_ai) && (
+            <button
+              onClick={() => setExpandAll((v) => !v)}
+              className="font-mono text-[10px] uppercase tracking-widest text-accent-ink hover:underline"
+            >
+              {expandAll ? "收起所有答案" : "展开所有答案"}
+            </button>
+          )}
           {data.map((q) => (
-            <QuestionCard key={q.id} q={q} highlight={submitted} />
+            <QuestionCard key={q.id} q={q} highlight={submitted} expandAll={expandAll} />
           ))}
           {data.length === 0 && (
             <p className="py-8 text-center font-serif text-muted">没有命中，换个说法或放宽筛选试试。</p>
