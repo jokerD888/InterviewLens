@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     extract_prompt_version: int = 1
     answer_prompt_version: int = 1
 
+    # ---- Bridge to daily-interview-prep ----
+    daily_prep_api_url: str = "http://localhost:8000/api"
+    daily_prep_token: str = ""
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

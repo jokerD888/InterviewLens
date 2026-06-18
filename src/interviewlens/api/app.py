@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..logging import log
 from .routes_admin import router as admin_router
+from .routes_bridge import router as bridge_router
 from .routes_search import router as search_router
 from .routes_summary import router as summary_router
 from .routes_taxonomy import router as taxonomy_router
@@ -49,6 +50,7 @@ app.add_middleware(
 app.include_router(taxonomy_router)
 app.include_router(search_router)
 app.include_router(summary_router)
+app.include_router(bridge_router)
 app.include_router(admin_router)
 
 

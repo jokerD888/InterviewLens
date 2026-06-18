@@ -75,3 +75,39 @@ class HealthOut(BaseModel):
     pg: bool
     redis: bool
     pgvector: bool
+
+
+# ---------------------------------------------------------------- Bridge
+
+class BridgeGenerateRequest(BaseModel):
+    question_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class BridgeGeneratedAnswer(BaseModel):
+    question_id: int
+    content: str
+    category: str | None = None
+    generated_answer: str | None = None
+    importance_score: int = 3
+    error: str | None = None
+
+
+class BridgeGenerateResponse(BaseModel):
+    answers: list[BridgeGeneratedAnswer]
+
+
+class BridgeExportItem(BaseModel):
+    question: str
+    answer: str
+    importance_score: int = 3
+    source_url: str | None = None
+
+
+class BridgeExportRequest(BaseModel):
+    cards: list[BridgeExportItem] = Field(min_length=1, max_length=50)
+
+
+class BridgeExportResponse(BaseModel):
+    imported: int
+    skipped: int
+    skipped_reasons: list[str] = Field(default_factory=list)
