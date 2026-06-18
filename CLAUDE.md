@@ -83,7 +83,8 @@ URL → Crawler → Cleaner → Extractor → Normalizer → Scorer
 | `src/interviewlens/scoring/` | `score_extracted()` pure function with configurable `ScorerWeights` |
 | `src/interviewlens/embedding/` | bge-m3 via sentence-transformers, `embed_texts()`, `cosine_matrix()`, backfill |
 | `src/interviewlens/aggregator/` | `aggregate_one()` / `aggregate_all()` — RAG summary generation |
-| `src/interviewlens/answerer/` | `run_answers()` / `generate_one()` — difficulty-adaptive AI answer generation |
+| `src/interviewlens/answerer/` | `run_answers()` / `generate_one()` — per-question AI answer generation |
+| `src/interviewlens/api/routes_bridge.py` | `POST /api/bridge/generate-answers`, `/api/bridge/export` — bridge to daily-interview-prep |
 | `src/interviewlens/tasks/` | Celery tasks (`crawl_url`, `enqueue_listing`, `aggregate_pair`), DLQ management |
 | `src/interviewlens/api/` | FastAPI app: taxonomy routes, semantic search, summaries, admin |
 | `src/interviewlens/observability.py` | Langfuse tracing + Redis metric counters (cache hits, tokens, node latency) |
@@ -97,7 +98,10 @@ Key design decisions:
 - `extract_version` on posts allows prompt-version gated re-extraction
 - Embeddings live on `questions` (not `posts`) — search granularity is individual questions
 - `summaries` is pre-computed offline, not generated on read
-- `alias_dict` has a `confidence` column; manual seeds get 1.0, LLM-learned gets lower
+- `answer_ai` + `answer_ai_version` on questions allow version-gated AI answer generation
+- `answerer` module generates per-question difficulty-adaptive AI answers (offline, like aggregator)
+- Bridge: `POST /api/bridge/generate-answers` → `POST /api/bridge/export` → daily-interview-prep bulk-import
+- `daily_prep_api_url` and `daily_prep_token` config entries for server-to-server auth
 
 ### Frontend (Next.js 15 App Router)
 
