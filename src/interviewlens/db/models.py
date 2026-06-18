@@ -66,6 +66,8 @@ class Question(SQLModel, table=True):
     content: str
     category: str | None = Field(default=None, index=True)
     answer_brief: str | None = None
+    answer_ai: str | None = None
+    answer_ai_version: int = Field(default=0)
     embedding: Any | None = Field(
         default=None,
         sa_column=Column(Vector(1024), nullable=True),

@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     log_level: str = "INFO"
     extract_prompt_version: int = 1
+    answer_prompt_version: int = 1
 
 
 @lru_cache(maxsize=1)
