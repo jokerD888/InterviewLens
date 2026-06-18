@@ -38,6 +38,7 @@ export type Question = {
   content: string;
   category: string | null;
   answer_brief: string | null;
+  answer_ai: string | null;
   quality_score: number | null;
   source_url: string | null;
   similarity: number | null;
