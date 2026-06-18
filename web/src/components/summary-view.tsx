@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { fetcher, paths, type Summary, type Question } from "@/lib/api";
+import { AnswerBlock } from "@/components/answer-block";
 
 type Props = {
   company: string | null;
@@ -115,6 +116,9 @@ export function SummaryView({ company, position, period = "all" }: Props) {
 
 /** 按 category 分组 + 逐条罗列 */
 function RawQuestionList({ questions }: { questions: Question[] }) {
+  const [expandAll, setExpandAll] = useState<boolean | undefined>(undefined);
+  const hasAnswers = questions.some((q) => q.answer_ai);
+
   const grouped: Record<string, Question[]> = {};
   for (const q of questions) {
     const cat = q.category || "未分类";
@@ -124,6 +128,14 @@ function RawQuestionList({ questions }: { questions: Question[] }) {
 
   return (
     <div className="mt-4 space-y-6">
+      {hasAnswers && (
+        <button
+          onClick={() => setExpandAll((v) => !v)}
+          className="font-mono text-[10px] uppercase tracking-widest text-accent-ink hover:underline"
+        >
+          {expandAll ? "收起所有答案" : "展开所有答案"}
+        </button>
+      )}
       {Object.entries(grouped).map(([cat, qs]) => (
         <section key={cat}>
           <h3 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted/60 mb-3">
@@ -138,6 +150,7 @@ function RawQuestionList({ questions }: { questions: Question[] }) {
                     {q.answer_brief}
                   </p>
                 )}
+                <AnswerBlock answer={q.answer_ai} expandAll={expandAll} />
                 {q.source_url && (
                   <a
                     href={q.source_url}
