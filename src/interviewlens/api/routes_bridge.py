@@ -59,6 +59,20 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
                 )
             )
             continue
+
+        # Persist to questions.answer_ai so frontend AnswerBlock can show it.
+        try:
+            async with session_scope() as wsession:
+                await wsession.execute(
+                    sa_text(
+                        "UPDATE questions SET answer_ai = :ans, answer_ai_version = :ver WHERE id = :qid"
+                    ),
+                    {"ans": answer, "ver": settings.answer_prompt_version, "qid": qid},
+                )
+                await wsession.commit()
+        except Exception as exc:  # noqa: BLE001
+            log.error("bridge.write_answer_ai_failed", qid=qid, err=str(exc))
+
         # Naive importance heuristic: longer question = more likely to be complex.
         score = 3
         if len(q["content"]) > 80:

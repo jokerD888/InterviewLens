@@ -115,12 +115,139 @@ NORMALIZE_FUNCTION_SCHEMA: dict = {
 AGGREGATOR_SYSTEM = """你是面试备考助手。基于用户给出的真实面试题目（已按公司+岗位+季度筛选），
 总结高频考点并给出备考建议。
 
+你必须输出一个 JSON 对象，严格遵守下方 schema。不要输出任何 JSON 之外的文字。
+
 铁律：
-1. 所有「高频考点」必须有原题支撑，每条引用 1-2 道原题。
-2. 不要编造题目；引用原题必须来自给定列表。
-3. 备考建议要具体到技术点（如「BTree vs LSM 比较」「ZSet 内部结构」），
-   不要「多刷算法」「夯实基础」这种空话。
-4. 输出严格 markdown，章节结构必须按用户给定的模板。"""
+1. high_frequency_topics 至少 3 条，每条 sample_questions 至少 1 道原题（必须来自给定列表）。
+2. focus_areas 至少 3 条，要具体到技术点（如「BTree vs LSM 比较」「ZSet 内部结构」），不要空话。
+3. edge_cases 至少 1 条（没有偏门题也要挑一道相对冷门的填入）。
+4. prep_advice 至少 3 条，针对该公司该岗位，不要通用空话。
+5. 不要编造题目；sample_questions 必须来自给定列表。
+6. 只输出 JSON，不要加 markdown 代码围栏，不要加任何解释性文字。
+7. 【最重要】禁止输出空数组 [] 或空字符串，每个字段都必须有内容。"""
+
+
+# JSON schema for aggregator output — structured data, rendered to markdown in code.
+# This guarantees 100% format consistency across all LLM calls.
+AGGREGATOR_JSON_SCHEMA: dict = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "interview_summary",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "required": [
+                "high_frequency_topics",
+                "focus_areas",
+                "edge_cases",
+                "prep_advice",
+            ],
+            "properties": {
+                "high_frequency_topics": {
+                    "type": "array",
+                    "description": "高频考点 Top 10，按频次降序。最多 10 条。",
+                    "items": {
+                        "type": "object",
+                        "required": ["topic", "frequency", "sample_questions"],
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "description": "考点名称，如「大模型微调实践」",
+                            },
+                            "frequency": {
+                                "type": "integer",
+                                "description": "出现频次",
+                            },
+                            "sample_questions": {
+                                "type": "array",
+                                "description": "1-2 道原题原文，必须来自题目列表",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "focus_areas": {
+                    "type": "array",
+                    "description": "重点考察方向，3-5 个分类总结",
+                    "items": {"type": "string"},
+                },
+                "edge_cases": {
+                    "type": "array",
+                    "description": "易忽略的偏门题（频次 1-2 但有特点）",
+                    "items": {
+                        "type": "object",
+                        "required": ["topic", "questions"],
+                        "properties": {
+                            "topic": {"type": "string"},
+                            "questions": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "prep_advice": {
+                    "type": "array",
+                    "description": "针对该公司该岗位的备考建议，3-5 条",
+                    "items": {"type": "string"},
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def render_aggregator_md(data: dict) -> str:
+    """Render structured aggregator JSON → consistent markdown.
+
+    This is the single source of truth for summary formatting.
+    LLM only fills data; formatting is 100% deterministic.
+    """
+    parts: list[str] = []
+
+    # ── 高频考点 Top 10 ──
+    topics = data.get("high_frequency_topics") or []
+    if topics:
+        parts.append("## 高频考点 Top 10\n")
+        for t in topics:
+            name = t.get("topic", "")
+            freq = t.get("frequency", 1)
+            parts.append(f"### {name} <sub>×{freq}</sub>\n")
+            for q in t.get("sample_questions") or []:
+                parts.append(f"> {q}\n")
+            parts.append("")
+
+    # ── 重点考察方向 ──
+    areas = data.get("focus_areas") or []
+    if areas:
+        parts.append("## 重点考察方向\n")
+        for a in areas:
+            parts.append(f"- {a}")
+        parts.append("")
+
+    # ── 易忽略的偏门题 ──
+    edges = data.get("edge_cases") or []
+    if edges:
+        parts.append("## 易忽略的偏门题\n")
+        for e in edges:
+            name = e.get("topic", "")
+            parts.append(f"### {name}\n")
+            for q in e.get("questions") or []:
+                parts.append(f"> {q}\n")
+            parts.append("")
+
+    # ── 备考建议 ──
+    advice = data.get("prep_advice") or []
+    if advice:
+        parts.append("## 备考建议\n")
+        for i, a in enumerate(advice, 1):
+            parts.append(f"{i}. {a}")
+        parts.append("")
+
+    return "\n".join(parts)
 
 
 def build_aggregator_messages(
@@ -130,7 +257,7 @@ def build_aggregator_messages(
     period: str,
     questions: list[dict],
 ) -> list[dict]:
-    """Compose Aggregator messages.
+    """Compose Aggregator messages — now requests JSON output.
 
     questions: list of {content, category, freq, quality_score, source_url}
     sorted by freq desc.
@@ -149,15 +276,12 @@ def build_aggregator_messages(
         f"周期：{period}\n"
         f"题目数：{len(questions)}\n\n"
         f"题目列表（按频次排序）：\n{questions_block}\n\n"
-        "请按以下章节输出：\n\n"
-        "## 高频考点 Top 10\n"
-        "（按频次排序，每条标题行末标注 <sub>×N</sub>，N 为频次数字；然后引用 1-2 道原题用 > 引用块）\n\n"
-        "## 重点考察方向\n"
-        "（3-5 个分类总结，例如「分布式锁实现细节」「JVM GC 调优」）\n\n"
-        "## 易忽略的偏门题\n"
-        "（出现频次 1-2 但有特点的题目）\n\n"
-        "## 备考建议\n"
-        "（针对该公司该岗位的针对性建议，3-5 条）"
+        "请输出 JSON，字段说明：\n"
+        "- high_frequency_topics: 高频考点 Top 10，按频次降序\n"
+        "- focus_areas: 重点考察方向，3-5 个字符串\n"
+        "- edge_cases: 偏门题，每个含 topic + questions 数组\n"
+        "- prep_advice: 针对性备考建议，3-5 条字符串\n\n"
+        "只输出 JSON，不要任何其他内容。"
     )
     return [
         {"role": "system", "content": AGGREGATOR_SYSTEM},

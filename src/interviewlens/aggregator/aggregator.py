@@ -4,6 +4,7 @@ embedding similarity, then ask DeepSeek to summarise into markdown.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -22,7 +23,10 @@ from ..db import (
 )
 from ..embedding import cosine_matrix, embed_texts
 from ..llm.deepseek import call_tool, get_client
-from ..llm.prompts import AGGREGATOR_SYSTEM, build_aggregator_messages
+from ..llm.prompts import (
+    build_aggregator_messages,
+    render_aggregator_md,
+)
 from ..logging import log
 from ..observability import incr_tokens
 
@@ -186,23 +190,69 @@ async def _summarise(
     questions: list[dict],
     trace=None,
 ) -> tuple[str, dict | None]:
-    """Generate markdown via DeepSeek (no tool call — plain chat)."""
+    """Generate structured JSON via DeepSeek, then render to consistent markdown.
+
+    If JSON mode produces empty output, retries once without response_format
+    (free-form markdown fallback).
+    """
     messages = build_aggregator_messages(
         company=company, position=position, period=period, questions=questions
     )
     client = get_client()
+    usage_total: dict | None = None
+
+    # ---- Attempt 1: JSON mode ----
     resp = await client.chat.completions.create(
         model=settings.deepseek_model_chat,
         messages=messages,  # type: ignore[arg-type]
         temperature=0.3,
-        max_tokens=4096,
+        max_tokens=8192,
+        response_format={"type": "json_object"},  # type: ignore[arg-type]
     )
-    content = resp.choices[0].message.content or ""
-    usage = resp.usage.model_dump() if resp.usage else None
-    if usage:
+    raw_content = resp.choices[0].message.content or ""
+    usage_total = resp.usage.model_dump() if resp.usage else None
+
+    try:
+        data = json.loads(raw_content)
+        if not isinstance(data, dict):
+            raise TypeError(f"Expected dict, got {type(data).__name__}")
+        content_md = render_aggregator_md(data)
+        if not content_md.strip():
+            raise ValueError("rendered markdown is empty — all fields were blank")
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError, ValueError) as exc:
+        log.warning(
+            "aggregator.json_parse_failed",
+            err=str(exc),
+            raw=raw_content[:200],
+            company=company,
+            position=position,
+        )
+        # ---- Attempt 2: free-form markdown (no response_format) ----
+        log.info("aggregator.retry_freeform", company=company, position=position)
+        try:
+            resp2 = await client.chat.completions.create(
+                model=settings.deepseek_model_chat,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0.3,
+                max_tokens=8192,
+            )
+            raw2 = resp2.choices[0].message.content or ""
+            if resp2.usage:
+                u2 = resp2.usage.model_dump()
+                if usage_total:
+                    usage_total["prompt_tokens"] = usage_total.get("prompt_tokens", 0) + int(u2.get("prompt_tokens") or 0)
+                    usage_total["completion_tokens"] = usage_total.get("completion_tokens", 0) + int(u2.get("completion_tokens") or 0)
+                else:
+                    usage_total = u2
+            content_md = raw2  # free-form markdown as-is
+        except Exception as retry_exc:  # noqa: BLE001
+            log.error("aggregator.retry_failed", err=str(retry_exc))
+            content_md = raw_content  # last resort: keep the failed JSON attempt
+
+    if usage_total:
         await incr_tokens(
-            prompt=int(usage.get("prompt_tokens") or 0),
-            completion=int(usage.get("completion_tokens") or 0),
+            prompt=int(usage_total.get("prompt_tokens") or 0),
+            completion=int(usage_total.get("completion_tokens") or 0),
         )
     if trace is not None:
         try:
@@ -210,12 +260,12 @@ async def _summarise(
                 name="aggregator.summary",
                 model=settings.deepseek_model_chat,
                 input=messages,
-                output=content,
-                usage=usage,
+                output=content_md,
+                usage=usage_total,
             ).end()
         except Exception:  # noqa: BLE001
             pass
-    return content, usage
+    return content_md, usage_total
 
 
 async def aggregate_one(

@@ -3,6 +3,12 @@
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Notes:
+#   - API / Worker: ./src → /app/src (read-only), uvicorn --reload
+#   - Web:           ./web → /app, Next.js dev mode (HMR)
+#   - Changing src/  → instant.  Changing web/ → instant.
+#   - Only pyproject.toml / uv.lock / web/package.json changes need --build.
 # ============================================================
 
 services:
@@ -27,3 +33,27 @@ services:
     volumes:
       - ./src:/app/src:ro
       - il_hf_cache:/app/.cache/huggingface
+
+  # ---- Next.js dev mode with HMR (no rebuild needed for frontend changes) ----
+  web:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./web:/app
+      - il_web_node_modules:/app/node_modules
+    environment:
+      NEXT_PUBLIC_API_BASE: http://api:8000
+    command:
+      [
+        "sh",
+        "-c",
+        "npm install -g pnpm@9 && pnpm install && pnpm dev",
+      ]
+    ports:
+      - "3013:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  il_web_node_modules:
