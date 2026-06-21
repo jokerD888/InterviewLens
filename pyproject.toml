@@ -29,7 +29,7 @@ dependencies = [
     "langgraph>=0.2.50",
     "langfuse>=2.55",
     "tenacity>=9.0",
-    # embedding (torch source overridden to CPU index below)
+    # embedding
     "sentence-transformers>=3.3",
     "torch>=2.5",
     # tasks
@@ -41,17 +41,8 @@ dependencies = [
     "rich>=13.9",
     "typer>=0.13",
     "structlog>=24.4",
+    "json-repair>=0.61.0",
 ]
-
-# Pull torch from PyTorch CPU index to skip ~2.4 GB of nvidia CUDA packages.
-# explicit=true + sources maps only torch to this index; rest stays on PyPI.
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
 
 [project.scripts]
 il = "interviewlens.cli:app"

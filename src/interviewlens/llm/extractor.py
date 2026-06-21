@@ -58,6 +58,7 @@ async def extract_from_text(
             "type": "function",
             "function": {"name": "extract_interview_post"},
         },
+        max_tokens=8192,
         trace_name="extractor",
         trace_metadata={"post_id": post_id, "prompt_version": version},
         trace=trace,
@@ -72,6 +73,18 @@ async def extract_from_text(
         args["level"] = "校招"
     elif raw_level and "社招" in str(raw_level):
         args["level"] = "社招"
+
+    # Normalise round_type and category: fallback to "其他" when LLM invents values
+    valid_round_types = {"技术一面", "技术二面", "技术三面", "技术四面", "技术五面", "HR面", "交叉面", "笔试", "主管面", "其他"}
+    valid_categories = {"算法", "数据结构", "系统设计", "数据库", "操作系统", "网络", "语言基础", "项目", "深度学习", "计算机体系结构", "AI基础", "大模型", "HR", "其他"}
+    for rd in args.get("rounds") or []:
+        if rd.get("round_type") and rd["round_type"] not in valid_round_types:
+            log.info("extractor.normalized_round_type", value=rd["round_type"])
+            rd["round_type"] = "其他"
+        for q in rd.get("questions") or []:
+            if q.get("category") and q["category"] not in valid_categories:
+                log.info("extractor.normalized_category", value=q["category"])
+                q["category"] = "其他"
 
     parsed = ExtractedPost.model_validate(args)
 

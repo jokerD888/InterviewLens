@@ -19,8 +19,19 @@ async def run(
     trace: Any | None = None,
 ) -> PipelineState:
     log.info("node.start", node=NODE_NAME, post_id=state.get("post_id"))
-    raw_html = state.get("raw_html") or ""
     post_id = state.get("post_id")
+
+    # If cleaned_text already present (e.g. from tab_crawler import), skip cleaning
+    existing_cleaned = state.get("cleaned_text") or ""
+    if existing_cleaned:
+        log.info("node.done", node=NODE_NAME, post_id=post_id, chars=len(existing_cleaned), reason="reused")
+        return {
+            "current_node": NODE_NAME,
+            "cleaned_text": existing_cleaned,
+            "char_count": len(existing_cleaned),
+        }
+
+    raw_html = state.get("raw_html") or ""
 
     async with node_span(
         node_name=NODE_NAME,

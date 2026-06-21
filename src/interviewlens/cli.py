@@ -901,11 +901,12 @@ def tab_crawl(
 @app.command(name="import-crawl")
 def import_crawl(
     file: str = typer.Argument(..., help="JSON Lines file from il tab-crawl"),
+    force: bool = typer.Option(False, "--force", help="Overwrite cleaned_text for existing posts"),
 ) -> None:
     """Import crawled JSON Lines into the PostgreSQL posts table.
 
     Skips posts whose source_url already exists (idempotent).
-    Sets extract_status='pending' so il resume will process them.
+    Use --force to overwrite cleaned_text and reset status for all posts.
     """
     import json
     from datetime import datetime
@@ -919,6 +920,7 @@ def import_crawl(
 
         new = 0
         skip = 0
+        updated = 0
         async with session_scope() as s:
             for p in posts:
                 url = p.get("detail_url", "")
@@ -928,7 +930,13 @@ def import_crawl(
                     await s.execute(select(Post).where(Post.source_url == url))
                 ).scalar_one_or_none()
                 if existing:
-                    skip += 1
+                    if force:
+                        existing.cleaned_text = p.get("content", "")
+                        existing.extract_status = "pending"
+                        s.add(existing)
+                        updated += 1
+                    else:
+                        skip += 1
                     continue
 
                 posted_at = None
@@ -949,7 +957,7 @@ def import_crawl(
                 new += 1
             await s.commit()
 
-        console.print(f"[green]{new} new[/green], [dim]{skip} skipped (already in DB)[/dim]")
+        console.print(f"[green]{new} new[/green], [cyan]{updated} updated[/cyan], [dim]{skip} skipped[/dim]")
 
     asyncio.run(_run())
 

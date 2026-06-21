@@ -17,8 +17,12 @@ class RoundType(StrEnum):
     R1 = "技术一面"
     R2 = "技术二面"
     R3 = "技术三面"
+    R4 = "技术四面"
+    R5 = "技术五面"
     HR = "HR面"
     CROSS = "交叉面"
+    WRITTEN = "笔试"
+    MANAGER = "主管面"
     OTHER = "其他"
 
 
@@ -32,6 +36,10 @@ class Category(StrEnum):
     LANG = "语言基础"
     PROJECT = "项目"
     HR = "HR"
+    DL = "深度学习"
+    ARCH = "计算机体系结构"
+    AI_BASE = "AI基础"
+    LLM = "大模型"
     OTHER = "其他"
 
 
@@ -112,8 +120,11 @@ EXTRACT_FUNCTION_SCHEMA: dict = {
                                     "技术一面",
                                     "技术二面",
                                     "技术三面",
+                                    "技术四面",
                                     "HR面",
                                     "交叉面",
+                                    "笔试",
+                                    "主管面",
                                     "其他",
                                     None,
                                 ],
@@ -136,6 +147,10 @@ EXTRACT_FUNCTION_SCHEMA: dict = {
                                                 "网络",
                                                 "语言基础",
                                                 "项目",
+                                                "深度学习",
+                                                "计算机体系结构",
+                                                "AI基础",
+                                                "大模型",
                                                 "HR",
                                                 "其他",
                                                 None,

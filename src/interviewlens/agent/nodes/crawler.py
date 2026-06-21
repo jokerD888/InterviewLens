@@ -40,7 +40,7 @@ async def run(
                 existing = (
                     await session.execute(select(Post).where(Post.source_url == url))
                 ).scalar_one_or_none()
-                if existing is not None and existing.raw_html and existing.cleaned_text:
+                if existing is not None and existing.cleaned_text:
                     log.info(
                         "node.crawler.reuse",
                         post_id=existing.id,
@@ -48,7 +48,7 @@ async def run(
                     )
                     return {
                         "post_id": existing.id,
-                        "raw_html": existing.raw_html,
+                        "raw_html": existing.raw_html or "",
                         "cleaned_text": existing.cleaned_text,
                         "title": existing.title,
                         "final_url": existing.source_url,

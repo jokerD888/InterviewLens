@@ -120,19 +120,25 @@ async def call_tool(
                         pass
                 raise RuntimeError("LLM returned no tool call")
             tc = tool_calls[0]
+            raw_args = tc.function.arguments
             try:
-                args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError as exc:
-                if generation:
-                    try:
-                        generation.end(
-                            level="ERROR",
-                            status_message=f"JSONDecodeError: {exc}",
-                            output=tc.function.arguments,
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                raise RuntimeError(f"Invalid JSON in tool args: {exc}") from exc
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                try:
+                    from json_repair import repair_json
+                    args = json.loads(repair_json(raw_args))
+                    log.info("llm.json_repaired")
+                except Exception as exc:
+                    if generation:
+                        try:
+                            generation.end(
+                                level="ERROR",
+                                status_message=f"JSONDecodeError: {exc}",
+                                output=raw_args,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    raise RuntimeError(f"Invalid JSON in tool args: {exc}") from exc
 
             usage = resp.usage.model_dump() if resp.usage else None
             if generation:
