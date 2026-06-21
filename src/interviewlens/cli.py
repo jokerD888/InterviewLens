@@ -849,6 +849,133 @@ def aggregate(
     asyncio.run(_run())
 
 
+# --------------------------------------------------------- tab-crawl
+@app.command(name="tab-crawl")
+def tab_crawl(
+    pages: int = typer.Option(10, help="How many API pages (0=unlimited for tab)"),
+    output: str = typer.Option("", help="Save results as JSON Lines to this path"),
+    delay: float = typer.Option(1.5, help="Seconds between detail page requests"),
+    source: str = typer.Option("tab", help="tab (default, 400 posts, discuss+moment) | joblist (2000 moment posts, faster)"),
+    since: str = typer.Option("", help="Only posts on/after this date (YYYY-MM-DD), joblist only"),
+    save_db: bool = typer.Option(False, "--save-db", help="Also write posts to the database (for il resume)"),
+) -> None:
+    """Crawl mianjing posts. Two modes:
+
+    --source tab (default): tab/content API, ~400 posts, discuss+moment posts,
+        visits detail pages for full content.  Ctrl+C safe.
+
+    --source joblist: job/list API, up to 2000 moment-type posts,
+        full content inline (no detail pages → much faster).  Supports --since.
+
+    Add --save-db to write posts to PostgreSQL so il resume can process them.
+
+    Examples:
+        il tab-crawl --pages 0 --output data/overnight.json --save-db
+        il tab-crawl --source joblist --pages 100 --since 2026-01-01 --output data/deep.json
+    """
+    async def _run() -> None:
+        if source == "joblist":
+            from datetime import datetime
+            from .crawler.job_list_crawler import crawl_job_list
+            since_dt = datetime.strptime(since, "%Y-%m-%d").replace(hour=0, minute=0) if since else None
+            results = await crawl_job_list(
+                pages=pages,
+                output_path=output or None,
+                since=since_dt,
+                delay=delay,
+            )
+        else:
+            from .crawler.tab_crawler import crawl_tab
+            results = await crawl_tab(
+                pages=pages,
+                output_path=output or None,
+                delay=delay,
+                save_to_db=save_db,
+            )
+        console.print(f"\n[green]Crawled {len(results)} posts[/green]")
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------- import-crawl
+@app.command(name="import-crawl")
+def import_crawl(
+    file: str = typer.Argument(..., help="JSON Lines file from il tab-crawl"),
+) -> None:
+    """Import crawled JSON Lines into the PostgreSQL posts table.
+
+    Skips posts whose source_url already exists (idempotent).
+    Sets extract_status='pending' so il resume will process them.
+    """
+    import json
+    from datetime import datetime
+    from .db import Post, session_scope
+
+    async def _run() -> None:
+        with open(file, encoding="utf-8") as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+        posts = [l for l in lines if "title" in l]
+        console.print(f"Loading [cyan]{len(posts)}[/cyan] posts from [yellow]{file}[/yellow]...")
+
+        new = 0
+        skip = 0
+        async with session_scope() as s:
+            for p in posts:
+                url = p.get("detail_url", "")
+                if not url:
+                    continue
+                existing = (
+                    await s.execute(select(Post).where(Post.source_url == url))
+                ).scalar_one_or_none()
+                if existing:
+                    skip += 1
+                    continue
+
+                posted_at = None
+                if p.get("created_at"):
+                    try:
+                        posted_at = datetime.strptime(p["created_at"], "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        pass
+
+                post = Post(
+                    source_url=url,
+                    title=p.get("title", ""),
+                    cleaned_text=p.get("content", ""),
+                    posted_at=posted_at,
+                    extract_status="pending",
+                )
+                s.add(post)
+                new += 1
+            await s.commit()
+
+        console.print(f"[green]{new} new[/green], [dim]{skip} skipped (already in DB)[/dim]")
+
+    asyncio.run(_run())
+
+
+# ------------------------------------------------------- clear-embeddings
+@app.command(name="clear-embeddings")
+def clear_embeddings(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Set all question embeddings to NULL (e.g. after switching embedding model)."""
+    if not yes:
+        confirmed = typer.confirm("This will clear ALL question embeddings. Continue?", default=False)
+        if not confirmed:
+            console.print("[yellow]cancelled[/yellow]")
+            raise typer.Exit(code=0)
+
+    async def _run() -> None:
+        from sqlalchemy import text as sa_text
+        async with session_scope() as s:
+            result = await s.execute(sa_text("UPDATE questions SET embedding = NULL"))
+            await s.commit()
+        console.print(f"[green]Cleared {result.rowcount} embeddings[/green]")
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------- answer
 @app.command()
 def answer(
@@ -922,162 +1049,29 @@ def show_summary(
 # ------------------------------------------------------------------- batch
 @app.command()
 def batch(
-    pages: int = typer.Option(1, help="How many listing pages to scan"),
-    source: str = typer.Option("mianjing", help="mianjing | api | interview | experience"),
-    job: str = typer.Option("backend", help="Job type for --source api: backend|frontend|test|ai"),
-    skip_normalize: bool = typer.Option(False, "--skip-normalize"),
-    inline: bool = typer.Option(False, "--inline", help="Run synchronously without Celery (debug)"),
+    pages: int = typer.Option(10, help="How many tab/content API pages (0=unlimited)"),
+    output: str = typer.Option("", help="Optional JSON Lines output path"),
+    delay: float = typer.Option(1.5, help="Seconds between detail page requests"),
 ) -> None:
-    """Discover URLs from Nowcoder and enqueue crawl+extract tasks.
+    """Crawl mianjing posts from Nowcoder's tab/content API (no 2000 post limit).
 
-    --source mianjing (default): Playwright 面经 tab click + AI filter (recommended).
-    --source api: direct gw-c API, fast but moment-type posts only.
-    --source interview/experience: Playwright page scraping (legacy).
+    Posts are written to disk in real-time — safe to Ctrl+C overnight.
+    --pages 0 means crawl until no more data.
+
+    Example:
+        il batch --pages 0 --output data/overnight.json
     """
+    from .crawler.tab_crawler import crawl_tab
 
-    if source == "mianjing":
-        from .crawler.api_discover import discover_and_fetch_mianjing
-
-        async def _mianjing_inline() -> None:
-            ids = await discover_and_fetch_mianjing(pages=pages, ai_filter=True)
-            total = len(ids)
-            console.print(f"[green]面经 tab: 发现 {total} 篇（已 AI 过滤）[/green]")
-            if ids:
-                console.print("[cyan]Running extraction on new posts...[/cyan]")
-                from .agent import resume_failed
-                summaries = await resume_failed(
-                    statuses=("pending", "failed"),
-                    limit=total,
-                    use_cache=True,
-                    fetcher=None,
-                )
-                ok = sum(1 for s in summaries if not s.get("errors"))
-                console.print(f"[green]extracted {ok}/{len(summaries)} posts[/green]")
-
-        if inline:
-            asyncio.run(_mianjing_inline())
-            return
-
-        # Celery mode
-        async def _mianjing_enqueue() -> None:
-            ids = await discover_and_fetch_mianjing(pages=pages, ai_filter=True)
-            from .db import Post, session_scope
-
-            async with session_scope() as s:
-                rows = (
-                    await s.execute(
-                        select(Post.source_url)
-                        .where(Post.id.in_(ids), Post.extract_status == "pending")
-                    )
-                ).all()
-
-            from .tasks.pipeline import crawl_url
-            enqueued = 0
-            for (url,) in rows:
-                crawl_url.delay(url, skip_normalize=skip_normalize)
-                enqueued += 1
-
-            console.print(
-                Panel(
-                    f"面经 tab 完成: {len(ids)} 篇已入库（AI 过滤）.\\n"
-                    f"Extraction tasks enqueued: {enqueued}\\n"
-                    f"Watch: docker logs -f il-worker",
-                    title="mianjing",
-                    border_style="green",
-                )
-            )
-
-        asyncio.run(_mianjing_enqueue())
-        return
-
-    if source == "api":
-        from .crawler.api_discover import discover_and_fetch
-
-        async def _api_inline() -> None:
-            ids = await discover_and_fetch(job=job, pages=pages)
-            console.print(f"[green]saved {len(ids)} posts from API[/green]")
-            if ids:
-                console.print("[cyan]Running extraction on new posts...[/cyan]")
-                from .agent import resume_failed
-                fetcher = None  # API source doesn't need Playwright
-                summaries = await resume_failed(
-                    statuses=("pending", "failed"),
-                    limit=len(ids),
-                    use_cache=True,
-                    fetcher=fetcher,
-                )
-                ok = sum(1 for s in summaries if not s.get("errors"))
-                console.print(f"[green]extracted {ok}/{len(summaries)} posts[/green]")
-
-        if inline:
-            asyncio.run(_api_inline())
-            return
-
-        # Celery mode: fetch via API, then fan-out crawl_url tasks per post
-        async def _api_enqueue() -> None:
-            ids = await discover_and_fetch(job=job, pages=pages)
-            from .db import Post, session_scope
-
-            async with session_scope() as s:
-                rows = (
-                    await s.execute(
-                        select(Post.source_url)
-                        .where(Post.id.in_(ids), Post.extract_status == "pending")
-                    )
-                ).all()
-
-            from .tasks.pipeline import crawl_url
-            enqueued = 0
-            for (url,) in rows:
-                crawl_url.delay(url, skip_normalize=skip_normalize)
-                enqueued += 1
-
-            console.print(
-                Panel(
-                    f"API discovery done: {len(ids)} saved.\n"
-                    f"Extraction tasks enqueued: {enqueued}\n"
-                    f"Watch: docker logs -f il-worker",
-                    title="enqueued",
-                    border_style="green",
-                )
-            )
-
-        asyncio.run(_api_enqueue())
-        return
-
-    # ---- legacy Playwright-based sources ----
-    async def _inline() -> None:
-        from .crawler import NowcoderFetcher, discover_from_listing
-        from .agent import run_pipeline
-
-        fetcher = NowcoderFetcher()
-        await fetcher.start()
-        try:
-            urls = await discover_from_listing(source=source, pages=pages, fetcher=fetcher)
-            log.info("inline.discovered", n=len(urls))
-            for u in urls:
-                try:
-                    final = await run_pipeline(u, fetcher=fetcher, skip_normalize=skip_normalize)
-                    console.print(f"[green]ok[/green] {u} → post_id={final.get('post_id')} score={final.get('quality_score')}")
-                except Exception as exc:  # noqa: BLE001
-                    console.print(f"[red]err[/red] {u} {exc}")
-        finally:
-            await fetcher.stop()
-
-    if inline:
-        asyncio.run(_inline())
-        return
-
-    from .tasks import enqueue_listing
-
-    result = enqueue_listing.delay(pages, source, skip_normalize)
-    console.print(
-        Panel(
-            f"task_id: {result.id}\nuse `il task-status {result.id}` or watch worker logs",
-            title="enqueued",
-            border_style="green",
+    async def _run() -> None:
+        results = await crawl_tab(
+            pages=pages,
+            output_path=output or None,
+            delay=delay,
         )
-    )
+        console.print(f"\n[green]Crawled {len(results)} posts[/green]")
+
+    asyncio.run(_run())
 
 
 # --------------------------------------------------------------- task-status

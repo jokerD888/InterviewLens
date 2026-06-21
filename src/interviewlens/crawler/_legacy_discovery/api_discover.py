@@ -55,13 +55,18 @@ async def discover_and_fetch(
     level: int = 3,  # 3 = all levels
     company_list: list[str] | None = None,
     delay: float = 1.5,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[int]:
     """Call gw-c API, persist posts, return list of post_ids.
 
     Each API response already contains the full post text (momentData.content),
     so we write cleaned_text directly and skip Playwright crawling.
+
+    ``since`` / ``until`` (naive datetimes) filter by posted_at before persistence.
+    API returns newest-first, so ``since`` also triggers an early stop.
     """
-    job_id = JOB_IDS.get(job, 818)
+    job_id = JOB_IDS.get(job, 0)  # 0 = all jobs (API ignores jobId filter)
     payload_base = {
         "companyList": company_list or [],
         "jobId": job_id,
@@ -95,24 +100,40 @@ async def discover_and_fetch(
                 log.info("api_discover.empty_page", page=page)
                 break
 
-            page_ids = await _persist_records(records)
+            page_ids = await _persist_records(records, since=since, until=until)
             all_ids.extend(page_ids)
             log.info("api_discover.page", page=page, saved=len(page_ids), total_so_far=len(all_ids))
+
+            # Early stop: newest-first ordering → when the last record is older than since, we're done.
+            if since and records:
+                last_record = records[-1]
+                last_ts = (last_record.get("momentData", {}) or {}).get("createdAt", 0)
+                if last_ts:
+                    last_dt = _parse_posted_at(last_ts)
+                    if last_dt and last_dt < since:
+                        log.info("api_discover.since_reached", page=page, last_date=str(last_dt))
+                        break
 
             await asyncio.sleep(delay)
 
     return all_ids
 
 
-async def _persist_records(records: list[dict]) -> list[int]:
-    """Write API records into posts table. Skips duplicates by source_url."""
+async def _persist_records(
+    records: list[dict],
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[int]:
+    """Write API records into posts table. Skips duplicates by source_url.
+
+    ``since`` / ``until`` (naive datetimes) filter which records to persist.
+    """
     ids: list[int] = []
     async with session_scope() as s:
         for r in records:
             md = r.get("momentData", {})
             extra = r.get("extraInfo", {})
-            # URL: type=74(面经moment) 用 /feed/main/detail/{uuid}
-            #      其他类型回退到 /discuss/{contentId}
             content_type = r.get("contentType", 0)
             uuid_val = md.get("uuid", "")
             content_id = extra.get("contentID_var") or str(md.get("id", ""))
@@ -126,6 +147,15 @@ async def _persist_records(records: list[dict]) -> list[int]:
 
             if not content.strip():
                 continue
+            if not title.strip():
+                continue
+
+            # Date range filter
+            if posted_at is not None:
+                if since is not None and posted_at < since:
+                    continue
+                if until is not None and posted_at > until:
+                    continue
 
             # Upsert: skip if URL already exists
             existing = (
@@ -288,8 +318,12 @@ async def discover_and_fetch_mianjing(
     *,
     pages: int = 3,
     ai_filter: bool = True,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> list[int]:
     """完整面经 tab 流程：发现 URL → AI 过滤 → 抓取内容 → 写入 PG。
+
+    ``since`` / ``until``: filter persisted posts by posted_at (extracted from page HTML).
 
     Returns:
         list of post_ids persisted.
@@ -341,6 +375,18 @@ async def discover_and_fetch_mianjing(
                     log.info("mianjing.fetch_skip", url=url, reason="无正文")
                     continue
 
+                # 尝试提取发布时间（meta / text 里的日期）
+                posted_at = _extract_posted_at_from_page(soup)
+
+                # 日期过滤
+                if posted_at is not None:
+                    if since is not None and posted_at < since:
+                        log.info("mianjing.fetch_skip", url=url, reason=f"too old: {posted_at}")
+                        continue
+                    if until is not None and posted_at > until:
+                        log.info("mianjing.fetch_skip", url=url, reason=f"too new: {posted_at}")
+                        continue
+
                 # AI 过滤
                 if ai_filter:
                     is_mj = await filter_is_mianjing_post(title, content)
@@ -361,6 +407,7 @@ async def discover_and_fetch_mianjing(
                         source_url=result.final_url,
                         title=title,
                         cleaned_text=content,
+                        posted_at=posted_at,
                         extract_status="pending",
                     )
                     s.add(post)
@@ -378,3 +425,33 @@ async def discover_and_fetch_mianjing(
 
     log.info("mianjing.done", discovered=len(urls), persisted=len(ids))
     return ids
+
+
+_DATE_RE = re.compile(
+    r"((?:20\d{2})[-/年](?:0?[1-9]|1[0-2])[-/月](?:0?[1-9]|[12]\d|3[01])日?)"
+)
+
+
+def _extract_posted_at_from_page(soup) -> datetime | None:
+    """Try to extract posted_at from page HTML (meta tags or text)."""
+    # 1) meta tags
+    for meta_sel in ('meta[property="article:published_time"]', 'meta[name="pubdate"]'):
+        el = soup.select_one(meta_sel)
+        if el and el.get("content"):
+            try:
+                return datetime.fromisoformat(el["content"].replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                pass
+
+    # 2) text date patterns: "2026-01-15" or "2026年1月15日"
+    text = soup.get_text(" ", strip=True)[:3000]
+    for m in _DATE_RE.finditer(text):
+        raw = m.group(1)
+        # Normalize Chinese date → ISO
+        raw = raw.replace("年", "-").replace("月", "-").replace("日", "")
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError:
+            continue
+
+    return None

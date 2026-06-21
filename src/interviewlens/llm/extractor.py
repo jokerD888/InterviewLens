@@ -63,7 +63,17 @@ async def extract_from_text(
         trace=trace,
     )
 
-    parsed = ExtractedPost.model_validate(result.arguments)
+    # Normalise level field: LLM may return variants like "暑期实习" → "实习"
+    args = result.arguments
+    raw_level = args.get("level", "")
+    if raw_level and "实习" in str(raw_level):
+        args["level"] = "实习"
+    elif raw_level and "校招" in str(raw_level):
+        args["level"] = "校招"
+    elif raw_level and "社招" in str(raw_level):
+        args["level"] = "社招"
+
+    parsed = ExtractedPost.model_validate(args)
 
     if result.usage:
         await incr_tokens(
