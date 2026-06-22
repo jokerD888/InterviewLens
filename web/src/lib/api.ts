@@ -112,6 +112,30 @@ export type BridgeExportResponse = {
   skipped_reasons: string[];
 };
 
+// Feed types
+export type FeedQuestion = {
+  id: number;
+  round_no: number | null;
+  round_type: string | null;
+  content: string;
+  answer_brief: string | null;
+  answer_ai: string | null;
+};
+
+export type PostFeedItem = {
+  id: number;
+  title: string | null;
+  source_url: string;
+  posted_at: string | null;
+  companies: string[];
+  positions: string[];
+  cleaned_text: string | null;
+  excerpt: string | null;
+  round_types: string[];
+  question_count: number;
+  questions: FeedQuestion[];
+};
+
 const API_PREFIX = "/api";
 
 function qs(params: Record<string, string | number | null | undefined>): string {
@@ -148,6 +172,21 @@ export const paths = {
     })}`,
 
   post: (id: number) => `/posts/${id}`,
+
+  posts: (p?: {
+    company?: string | null;
+    position?: string | null;
+    category?: string | null;
+    limit?: number;
+    offset?: number;
+  }) =>
+    `/posts${qs({
+      company: p?.company,
+      position: p?.position,
+      category: p?.category,
+      limit: p?.limit ?? 20,
+      offset: p?.offset ?? 0,
+    })}`,
 
   summaries: (p?: { company?: string; position?: string; period?: string; limit?: number }) =>
     `/summaries${qs({

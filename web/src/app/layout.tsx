@@ -49,6 +49,7 @@ function Masthead() {
         </div>
         <nav className="flex items-center gap-1 pb-1 font-mono text-[11px] uppercase tracking-widest">
           <NavLink href="/">浏览</NavLink>
+          <NavLink href="/feed">最新面经</NavLink>
           <NavLink href="/search">检索</NavLink>
           <NavLink href="/admin">机房</NavLink>
           <a

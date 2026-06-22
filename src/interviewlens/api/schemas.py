@@ -111,3 +111,28 @@ class BridgeExportResponse(BaseModel):
     imported: int
     skipped: int
     skipped_reasons: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------- Feed
+
+class FeedQuestionOut(BaseModel):
+    id: int
+    round_no: int | None = None
+    round_type: str | None = None
+    content: str
+    answer_brief: str | None = None
+    answer_ai: str | None = None
+
+
+class PostFeedItem(BaseModel):
+    id: int
+    title: str | None = None
+    source_url: str
+    posted_at: datetime | None = None
+    companies: list[str] = Field(default_factory=list)
+    positions: list[str] = Field(default_factory=list)
+    cleaned_text: str | None = None
+    excerpt: str | None = None
+    round_types: list[str] = Field(default_factory=list)
+    question_count: int = 0
+    questions: list[FeedQuestionOut] = Field(default_factory=list)
