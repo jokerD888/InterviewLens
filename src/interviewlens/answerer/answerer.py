@@ -21,7 +21,7 @@ from ..logging import log
 from ..observability import incr_tokens
 
 ANSWER_NAMESPACE = "answer"
-CONCURRENCY = 5
+CONCURRENCY = 100
 MAX_TOKENS = 1500
 
 
@@ -162,15 +162,21 @@ async def run_answers(
     log.info("answer.start", targets=len(targets))
     outcome = AnswerOutcome()
     sem = asyncio.Semaphore(CONCURRENCY)
+    done = 0
+    total = len(targets)
 
     async def _one(t: dict) -> None:
+        nonlocal done
         async with sem:
             answer = await generate_one(content=t["content"], category=t["category"])
             if answer is None:
                 outcome.failed += 1
-                return
-            await _write_answer(t["id"], answer)
-            outcome.generated += 1
+            else:
+                await _write_answer(t["id"], answer)
+                outcome.generated += 1
+            done += 1
+            if done % 100 == 0 or done == total:
+                log.info("answer.progress", done=done, total=total, generated=outcome.generated, failed=outcome.failed)
 
     await asyncio.gather(*(_one(t) for t in targets))
     return outcome

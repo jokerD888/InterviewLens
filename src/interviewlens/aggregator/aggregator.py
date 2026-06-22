@@ -214,40 +214,10 @@ async def _summarise(
 
     try:
         data = json.loads(raw_content)
-        if not isinstance(data, dict):
-            raise TypeError(f"Expected dict, got {type(data).__name__}")
-        content_md = render_aggregator_md(data)
-        if not content_md.strip():
-            raise ValueError("rendered markdown is empty — all fields were blank")
-    except (json.JSONDecodeError, TypeError, KeyError, AttributeError, ValueError) as exc:
-        log.warning(
-            "aggregator.json_parse_failed",
-            err=str(exc),
-            raw=raw_content[:200],
-            company=company,
-            position=position,
-        )
-        # ---- Attempt 2: free-form markdown (no response_format) ----
-        log.info("aggregator.retry_freeform", company=company, position=position)
-        try:
-            resp2 = await client.chat.completions.create(
-                model=settings.deepseek_model_chat,
-                messages=messages,  # type: ignore[arg-type]
-                temperature=0.3,
-                max_tokens=8192,
-            )
-            raw2 = resp2.choices[0].message.content or ""
-            if resp2.usage:
-                u2 = resp2.usage.model_dump()
-                if usage_total:
-                    usage_total["prompt_tokens"] = usage_total.get("prompt_tokens", 0) + int(u2.get("prompt_tokens") or 0)
-                    usage_total["completion_tokens"] = usage_total.get("completion_tokens", 0) + int(u2.get("completion_tokens") or 0)
-                else:
-                    usage_total = u2
-            content_md = raw2  # free-form markdown as-is
-        except Exception as retry_exc:  # noqa: BLE001
-            log.error("aggregator.retry_failed", err=str(retry_exc))
-            content_md = raw_content  # last resort: keep the failed JSON attempt
+    except json.JSONDecodeError:
+        from json_repair import repair_json
+        data = json.loads(repair_json(raw_content))
+    content_md = render_aggregator_md(data) if isinstance(data, dict) else str(data)
 
     if usage_total:
         await incr_tokens(
@@ -320,6 +290,31 @@ async def aggregate_one(
             written=False,
             skip_reason="no_questions",
         )
+
+    # Skip if summary already exists and question count hasn't changed
+    if write:
+        async with session_scope() as session:
+            existing = (
+                await session.execute(
+                    select(Summary).where(
+                        Summary.company_id == c_id,
+                        Summary.position_id == p_id,
+                        Summary.period == period_label,
+                    )
+                )
+            ).scalar_one_or_none()
+        if existing is not None and existing.sample_count == len(raw):
+            log.info("aggregate.cached", company=company, position=position, period=period_label, samples=len(raw))
+            return AggregateOutcome(
+                company_id=c_id,
+                position_id=p_id,
+                period=period_label,
+                sample_count=len(raw),
+                summary_chars=0,
+                cache_hit_questions=0,
+                written=False,
+                skip_reason="cached",
+            )
 
     embeddings = await _fetch_embeddings([q["id"] for q in raw])
     clusters = _cluster_questions(raw, embeddings, threshold=dedup_threshold)
@@ -397,7 +392,7 @@ async def aggregate_all(
 
     log.info("aggregate.all_pairs", n=len(pairs))
     results: list[AggregateOutcome] = []
-    sem = asyncio.Semaphore(5)  # at most 5 concurrent DeepSeek calls
+    sem = asyncio.Semaphore(20)  # DeepSeek flash supports 2500 CCU
 
     async def _one(c_name: str, p_name: str) -> AggregateOutcome | None:
         async with sem:

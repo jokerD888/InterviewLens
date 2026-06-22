@@ -72,6 +72,66 @@ json.loads(raw_args)        ← first attempt
                     └── failure → retry LLM call (up to 3 attempts, temp→0)
 ```
 
+## Known limitation: Image-only posts (imgMoment)
+
+Some Nowcoder posts contain only screenshots (`momentData.imgMoment[]`) with no
+text content. After cleaning, these yield fewer than 200 characters (mostly page
+navigation crumbs) and are marked `extract_status='skipped'` with reason
+`too_short`.
+
+**Cannot fix with current setup** because `deepseek-v4-flash` is text-only.
+DeepSeek's multimodal models (`DeepSeek-VL2`) are separate from the Chat API
+and require a different integration.
+
+Impact: ~5/400 posts (1.25%) — negligible. These posts are skipped silently
+and do not affect question/answer data quality.
+
+If image OCR becomes necessary in the future, options include:
+- Integrate DeepSeek-VL2 multimodal API (separate endpoint, higher cost)
+- Pre-process images with a local OCR tool (e.g. PaddleOCR) and feed text to existing pipeline
+
+## Issue: Aggregate summaries displayed as raw JSON
+
+### Symptom
+
+Frontend shows raw JSON instead of formatted Markdown for ~50% of summaries:
+
+```json
+{ "high_frequency_topics": [{ "topic": "...", "sample_questions": [...] }], ... }
+```
+
+### Root cause
+
+Chain of two failures in the aggregator pipeline:
+
+1. **`edge_cases` type mismatch**: the prompt asks DeepSeek for `edge_cases` as an array, but
+   the model sometimes returns a single object `{topic: ..., questions: [...]}`. The
+   `render_aggregator_md()` function iterates over it expecting an array → `AttributeError`
+   on dict key iteration.
+
+2. **Retry fallback produces JSON again**: the exception triggers a free-form retry
+   (no `response_format`). The retry reuses the same prompt which ends with
+   "只输出 JSON，不要任何其他内容" → DeepSeek outputs JSON → stored as-is without rendering.
+
+### Fix
+
+1. **`render_aggregator_md()`** (`llm/prompts.py`): wrap single `edge_cases` object into a
+   list before iterating; skip non-dict items gracefully.
+
+2. **Remove retry fallback** (`aggregator/aggregator.py`): `response_format="json_object"`
+   guarantees valid JSON from DeepSeek. `json-repair` handles rare parse failures.
+   No need for a fallback that would store un-rendered JSON.
+
+3. **Repair corrupted data**: query summaries where `content_md` is parseable as raw
+   JSON → delete them → re-run aggregate. The good markdown summaries remain cached.
+
+### Lessons
+
+- `response_format="json_object"` with `json-repair` is sufficient; never store raw LLM
+  output without deterministic post-processing.
+- Renderer must be defensive against LLM type variance (array vs object, null fields).
+- Database query for corrupt rows + targeted re-generation is better than a full rebuild.
+
 ## Files changed
 
 | File | Change |

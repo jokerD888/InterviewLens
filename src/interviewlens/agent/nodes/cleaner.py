@@ -15,7 +15,7 @@ NODE_NAME = "cleaner"
 async def run(
     state: PipelineState,
     *,
-    min_chars: int = 200,
+    min_chars: int = 0,  # let LLM decide — API cost is negligible
     trace: Any | None = None,
 ) -> PipelineState:
     log.info("node.start", node=NODE_NAME, post_id=state.get("post_id"))

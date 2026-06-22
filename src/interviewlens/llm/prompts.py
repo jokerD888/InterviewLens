@@ -230,9 +230,13 @@ def render_aggregator_md(data: dict) -> str:
 
     # ── 易忽略的偏门题 ──
     edges = data.get("edge_cases") or []
+    if isinstance(edges, dict):
+        edges = [edges]  # LLM may return a single object instead of array
     if edges:
         parts.append("## 易忽略的偏门题\n")
         for e in edges:
+            if not isinstance(e, dict):
+                continue
             name = e.get("topic", "")
             parts.append(f"### {name}\n")
             for q in e.get("questions") or []:
