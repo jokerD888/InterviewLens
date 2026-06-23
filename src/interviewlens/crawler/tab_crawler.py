@@ -22,6 +22,7 @@ from pathlib import Path
 from ..config import settings
 from ..db import Post, session_scope
 from ..logging import log
+from .cleaner import strip_nowcoder_noise
 from .playwright_runner import NowcoderFetcher
 
 TAB_API = "https://gw-c.nowcoder.com/api/sparta/home/tab/content"
@@ -103,19 +104,45 @@ async def fetch_tab_page(page_no: int, fetcher: NowcoderFetcher) -> list[dict]:
 
 
 async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, str]:
-    """Visit a detail page and extract (content, page_title)."""
+    """Visit a detail page and extract (content, page_title).
+
+    Tries multiple CSS selectors for the Nowcoder post body.  When none
+    match, falls back to body text but removes known UI noise elements
+    (action bars, comment boxes, sidebar ads) before extraction.
+    """
     page = await fetcher._context.new_page()
     try:
         await page.goto(detail_url, wait_until="domcontentloaded", timeout=20000)
         await asyncio.sleep(2)
         content = await page.evaluate("""
             () => {
-                for (const sel of ['.nc-post-content', '.nc-slate-editor-content',
-                                    'article', '[class*="post-detail"]']) {
+                // 1. Try specific content containers (newest → oldest DOM pattern)
+                for (const sel of [
+                    '.nc-slate-editor-content',
+                    '.nc-post-content',
+                    '[class*="post-content"]',
+                    '[class*="feed-detail"] [class*="content"]',
+                    'article',
+                    '[class*="post-detail"]',
+                ]) {
                     const el = document.querySelector(sel);
-                    if (el) return el.innerText;
+                    if (el && el.innerText.trim().length > 50) return el.innerText;
                 }
-                return document.body.innerText.substring(0, 5000);
+
+                // 2. Fallback: clone body, strip noise elements, then extract
+                const clone = document.body.cloneNode(true);
+                const noiseSelectors = [
+                    '[class*="comment"]', '[class*="action"]', '[class*="sidebar"]',
+                    '[class*="recommend"]', '[class*="ad-"]', '[class*="advert"]',
+                    '.nc-post-action', '.nc-comment', '.post-action',
+                    'nav', 'header', 'footer', 'aside',
+                    '[class*="quick-reply"]', '[class*="emoji"]',
+                ];
+                for (const sel of noiseSelectors) {
+                    clone.querySelectorAll(sel).forEach(el => el.remove());
+                }
+                const text = clone.innerText;
+                return text.substring(0, 8000);
             }
         """)
         page_title = await page.evaluate("""
@@ -128,7 +155,9 @@ async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, 
             }
         """)
         await page.close()
-        return content or "", page_title or ""
+        # Strip residual Nowcoder UI noise (action bars, ads, etc.)
+        content = strip_nowcoder_noise(content or "")
+        return content, page_title or ""
     except Exception:
         await page.close()
         return "", ""

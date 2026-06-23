@@ -2,9 +2,6 @@
 
 import { useState } from "react";
 import { ExternalLink, ChevronDown } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
 import { cn } from "@/lib/cn";
 import { AnswerBlock } from "@/components/answer-block";
 import type { PostFeedItem } from "@/lib/api";
@@ -78,19 +75,6 @@ export function FeedCard({ post }: Props) {
         {/* Expanded body */}
         {open && (
           <div className="mt-4 space-y-5 border-t border-border/60 pt-4">
-            {post.cleaned_text && (
-              <section>
-                <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">
-                  ¶ 帖子原文
-                </h4>
-                <div className="prose-il text-[15px] leading-relaxed text-ink/90">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                    {post.cleaned_text}
-                  </ReactMarkdown>
-                </div>
-              </section>
-            )}
-
             {post.questions.length > 0 && (
               <section>
                 <h4 className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">

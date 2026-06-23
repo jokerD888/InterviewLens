@@ -1,10 +1,11 @@
-"""/posts — time-sorted post feed with company/position/category filters."""
+"""//posts — time-sorted post feed with company/position/category filters."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..crawler.cleaner import strip_nowcoder_noise
 from .deps import get_session
 from .schemas import FeedQuestionOut, PostFeedItem
 
@@ -23,7 +24,8 @@ async def feed(
     """Time-sorted post feed with optional company/position/category filters.
 
     Returns posts ordered by ``posted_at DESC NULLS LAST``.
-    Only posts with ``extract_status = 'done'`` are included.
+    Only posts with ``extract_status = 'done'`` **and at least one extracted
+    question** are included — posts without questions are noise for the feed.
     Each post includes its associated questions (questions are fetched
     in a second query and merged in Python).
     """
@@ -55,6 +57,7 @@ async def feed(
     LEFT JOIN questions q ON q.post_id = po.id
     WHERE {where}
     GROUP BY po.id
+    HAVING COUNT(DISTINCT q.id) FILTER (WHERE q.id IS NOT NULL) > 0
     ORDER BY po.posted_at DESC NULLS LAST
     LIMIT :limit OFFSET :offset
     """
@@ -77,10 +80,14 @@ async def feed(
     for qr in q_rows:
         q_map[qr["post_id"]].append(FeedQuestionOut(**dict(qr)))
 
-    def _excerpt(text: str | None, max_chars: int = 200) -> str | None:
-        if not text:
+    def _excerpt(questions: list[FeedQuestionOut], cleaned: str | None, max_chars: int = 200) -> str | None:
+        """Build excerpt from the first question, falling back to cleaned text."""
+        if questions:
+            q = questions[0].content
+            return q[:max_chars] + "…" if len(q) > max_chars else q
+        if not cleaned:
             return None
-        return text[:max_chars] + "…" if len(text) > max_chars else text
+        return cleaned[:max_chars] + "…" if len(cleaned) > max_chars else cleaned
 
     return [
         PostFeedItem(
@@ -90,8 +97,8 @@ async def feed(
             posted_at=r["posted_at"],
             companies=list(r["companies"] or []),
             positions=list(r["positions"] or []),
-            cleaned_text=r["cleaned_text"],
-            excerpt=_excerpt(r["cleaned_text"]),
+            cleaned_text=strip_nowcoder_noise(r["cleaned_text"]) if r["cleaned_text"] else None,
+            excerpt=_excerpt(q_map.get(r["id"], []), r["cleaned_text"]),
             round_types=list(r["round_types"] or []),
             question_count=r["question_count"],
             questions=q_map.get(r["id"], []),
