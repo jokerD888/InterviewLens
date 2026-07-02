@@ -130,8 +130,8 @@ def clean_html(html: str, *, url: str | None = None) -> CleanedDoc:
             include_tables=False,
             no_fallback=False,
         ) or ""
-    except Exception as exc:  # noqa: BLE001
-        log.warning("clean.trafilatura_failed", err=str(exc))
+    except Exception:  # noqa: BLE001  # ponytail: trafilatura raises varied/untyped errors; broad catch intentional
+        log.warning("clean.trafilatura_failed", exc_info=True)
         text = ""
 
     soup = BeautifulSoup(html, "html.parser")

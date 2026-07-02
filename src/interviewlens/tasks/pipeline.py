@@ -37,11 +37,12 @@ def _run_async(coro: Any) -> Any:
 
 
 def _dlq_push(task_name: str, payload: dict) -> None:
+    # Layer B: only Redis/JSON failures degrade; logic bugs bubble.
     try:
         r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         r.rpush(f"il:dlq:{task_name}", json.dumps(payload, ensure_ascii=False))
-    except Exception as exc:  # noqa: BLE001
-        log.warning("dlq.push_failed", task=task_name, err=str(exc))
+    except (redis.RedisError, json.JSONDecodeError, TypeError):
+        log.warning("dlq.push_failed", task=task_name, exc_info=True)
 
 
 # ----------------------------------------------------------------- crawl_url
@@ -85,7 +86,8 @@ def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
 
     try:
         return _run_async(_go())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # ponytail: Celery task boundary — catch-all + DLQ + re-raise for retry
+        log.error("crawl_url.failed", url=url, exc_info=True)
         if self.request.retries >= (self.max_retries or 0):
             _dlq_push(
                 "il.crawl_url",
@@ -147,7 +149,8 @@ def aggregate_pair(self, company: str, position: str, period: str | None = None)
 
     try:
         return _run_async(_go())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # ponytail: Celery task boundary — catch-all + DLQ + re-raise for retry
+        log.error("aggregate_pair.failed", company=company, position=position, exc_info=True)
         if self.request.retries >= (self.max_retries or 0):
             _dlq_push(
                 "il.aggregate_pair",

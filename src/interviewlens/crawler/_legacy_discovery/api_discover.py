@@ -18,6 +18,7 @@ from sqlmodel import text
 
 from ..config import settings
 from ..db import Post, session_scope
+from ..errors import swallow
 from ..logging import log
 from ..llm.deepseek import get_client
 
@@ -87,8 +88,8 @@ async def discover_and_fetch(
                 )
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception as exc:
-                log.error("api_discover.request_failed", page=page, err=str(exc))
+            except Exception as exc:  # ponytail: legacy, replaced by tab_crawler
+                log.error("api_discover.request_failed", page=page, exc_info=True)
                 continue
 
             if not data.get("success") or data.get("code") != 0:
@@ -229,8 +230,8 @@ async def filter_is_mianjing_post(title: str, content: str) -> bool:
             trace_name="mianjing_filter",
         )
         return result.arguments.get("is_mianjing", False)
-    except Exception as exc:
-        log.warning("mianjing_filter.ai_error", err=str(exc))
+    except Exception as exc:  # ponytail: legacy, replaced by tab_crawler
+        log.warning("mianjing_filter.ai_error", exc_info=True)
         return _keyword_is_mianjing(title, content)
 
 
@@ -274,18 +275,14 @@ async def discover_urls_from_mianjing(pages: int) -> list[str]:
 
         # 1. 打开首页
         await page.goto("https://www.nowcoder.com/", wait_until="domcontentloaded", timeout=30000)
-        try:
+        with swallow("api_discover.wait_networkidle_failed"):  # ponytail: legacy UI best-effort
             await page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
         await asyncio.sleep(1)
 
         # 2. 关弹窗
-        try:
+        with swallow("api_discover.close_dialog_failed"):  # ponytail: legacy UI best-effort
             await page.locator(".el-dialog__close").first.click(force=True, timeout=2000)
             await asyncio.sleep(0.5)
-        except Exception:
-            pass
 
         # 3. 点击面经 tab
         mj_tab = page.get_by_text("面经", exact=True).first
@@ -417,8 +414,8 @@ async def discover_and_fetch_mianjing(
 
                 log.info("mianjing.persisted", url=result.final_url, i=i+1, total=len(urls))
 
-            except Exception as exc:
-                log.error("mianjing.fetch_error", url=url, err=str(exc))
+            except Exception as exc:  # ponytail: legacy, replaced by tab_crawler
+                log.error("mianjing.fetch_error", url=url, exc_info=True)
                 continue
 
             await asyncio.sleep(1.5)

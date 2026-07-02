@@ -48,6 +48,6 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except Exception:  # transaction boundary: rollback + re-raise (never swallow)
             await session.rollback()
             raise

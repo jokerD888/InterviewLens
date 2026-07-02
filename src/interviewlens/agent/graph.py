@@ -13,6 +13,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from ..crawler import NowcoderFetcher
+from ..errors import swallow
 from ..logging import log
 from ..observability import get_langfuse, langfuse_flush
 from .nodes import cleaner as cleaner_node
@@ -111,7 +112,7 @@ async def run_pipeline(
     lf = get_langfuse()
     trace = None
     if lf is not None:
-        try:
+        with swallow("graph.trace_create_failed", url=url):  # Layer A
             trace = lf.trace(
                 name="il.pipeline",
                 metadata={
@@ -122,9 +123,6 @@ async def run_pipeline(
                     "skip_normalize": skip_normalize,
                 },
             )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("graph.trace_create_failed", err=str(exc))
-            trace = None
 
     app = build_graph(
         fetcher=fetcher,
@@ -138,7 +136,7 @@ async def run_pipeline(
     try:
         final: PipelineState = await app.ainvoke(initial)
         if trace is not None:
-            try:
+            with swallow("graph.trace_update_failed", url=url):  # Layer A
                 trace.update(
                     output={
                         "post_id": final.get("post_id"),
@@ -149,8 +147,6 @@ async def run_pipeline(
                         "quality_score": final.get("quality_score"),
                     }
                 )
-            except Exception:  # noqa: BLE001
-                pass
         return final
     finally:
         langfuse_flush()

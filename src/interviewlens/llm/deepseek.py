@@ -15,6 +15,7 @@ from tenacity import (
 )
 
 from ..config import settings
+from ..errors import swallow
 from ..logging import log
 from ..observability import get_langfuse
 
@@ -63,12 +64,9 @@ async def call_tool(
     lf = get_langfuse()
     own_trace = False
     if trace is None and lf is not None:
-        try:
+        with swallow("langfuse.trace_create_failed"):  # Layer A
             trace = lf.trace(name=trace_name or "extract", metadata=trace_metadata or {})
             own_trace = True
-        except Exception as exc:  # noqa: BLE001
-            log.warning("langfuse.trace_create_failed", err=str(exc))
-            trace = None
 
     attempt_idx = 0
     async for attempt in AsyncRetrying(
@@ -89,16 +87,13 @@ async def call_tool(
             )
             generation = None
             if trace is not None:
-                try:
+                with swallow("langfuse.gen_create_failed", attempt=attempt_idx):  # Layer A
                     generation = trace.generation(
                         name="deepseek.tool_call",
                         model=model,
                         input=messages,
                         metadata={"attempt": attempt_idx, "temperature": local_temp},
                     )
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("langfuse.gen_create_failed", err=str(exc))
-                    generation = None
 
             resp: ChatCompletion = await client.chat.completions.create(
                 model=model,
@@ -114,10 +109,8 @@ async def call_tool(
             tool_calls = choice.message.tool_calls or []
             if not tool_calls:
                 if generation:
-                    try:
+                    with swallow("langfuse.gen_end_failed"):  # Layer A
                         generation.end(level="ERROR", status_message="no tool call")
-                    except Exception:  # noqa: BLE001
-                        pass
                 raise RuntimeError("LLM returned no tool call")
             tc = tool_calls[0]
             raw_args = tc.function.arguments
@@ -128,29 +121,24 @@ async def call_tool(
                     from json_repair import repair_json
                     args = json.loads(repair_json(raw_args))
                     log.info("llm.json_repaired")
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001  # ponytail: repair_json failure type is unpredictable, broad catch intentional
+                    log.warning("llm.json_repair_failed", exc_info=True)
                     if generation:
-                        try:
+                        with swallow("langfuse.gen_end_failed"):  # Layer A
                             generation.end(
                                 level="ERROR",
                                 status_message=f"JSONDecodeError: {exc}",
                                 output=raw_args,
                             )
-                        except Exception:  # noqa: BLE001
-                            pass
                     raise RuntimeError(f"Invalid JSON in tool args: {exc}") from exc
 
             usage = resp.usage.model_dump() if resp.usage else None
             if generation:
-                try:
+                with swallow("langfuse.gen_end_failed"):  # Layer A
                     generation.end(output=args, usage=usage)
-                except Exception:  # noqa: BLE001
-                    pass
             if own_trace and trace is not None:
-                try:
+                with swallow("langfuse.trace_update_failed"):  # Layer A
                     trace.update(output=args)
-                except Exception:  # noqa: BLE001
-                    pass
             log.info(
                 "llm.done",
                 tool=tc.function.name,

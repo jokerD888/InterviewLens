@@ -28,14 +28,15 @@ def make_cache_key(*, namespace: str, payload: Any, version: int | str) -> str:
 
 
 async def cache_get(key: str) -> dict | None:
+    # Layer B: only Redis/JSON failures degrade to a miss; logic bugs bubble.
     try:
         r = _get_redis()
         s = await r.get(key)
         if s is None:
             return None
         return json.loads(s)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cache.get_failed", err=str(exc))
+    except (aioredis.RedisError, json.JSONDecodeError):
+        log.warning("cache.get_failed", exc_info=True)
         return None
 
 
@@ -43,8 +44,8 @@ async def cache_set(key: str, value: dict, *, ttl_seconds: int = 60 * 60 * 24 * 
     try:
         r = _get_redis()
         await r.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("cache.set_failed", err=str(exc))
+    except aioredis.RedisError:
+        log.warning("cache.set_failed", exc_info=True)
 
 
 async def close_redis() -> None:

@@ -19,8 +19,11 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from playwright.async_api import Error as PlaywrightError
+
 from ..config import settings
 from ..db import Post, session_scope
+from ..errors import swallow
 from ..logging import log
 from .cleaner import strip_nowcoder_noise
 from .playwright_runner import NowcoderFetcher
@@ -96,11 +99,13 @@ async def fetch_tab_page(page_no: int, fetcher: NowcoderFetcher) -> list[dict]:
         await page.goto(url, wait_until="domcontentloaded", timeout=15000)
         text = await page.evaluate("() => document.body.innerText")
         data = json.loads(text)
-        await page.close()
         return data.get("data", {}).get("records") or []
-    except Exception:
-        await page.close()
+    except (PlaywrightError, asyncio.TimeoutError, json.JSONDecodeError):
+        # Layer C: network/render/JSON failures → empty page; selector bugs bubble.
+        log.warning("tab.page_fetch_failed", page_no=page_no, exc_info=True)
         return []
+    finally:
+        await page.close()
 
 
 async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, str]:
@@ -158,9 +163,12 @@ async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, 
         # Strip residual Nowcoder UI noise (action bars, ads, etc.)
         content = strip_nowcoder_noise(content or "")
         return content, page_title or ""
-    except Exception:
-        await page.close()
+    except (PlaywrightError, asyncio.TimeoutError):
+        # Layer C: render/network failures → empty; selector/AttributeError bubble.
+        log.warning("tab.detail_fetch_failed", url=detail_url, exc_info=True)
         return "", ""
+    finally:
+        await page.close()
 
 
 async def crawl_tab(

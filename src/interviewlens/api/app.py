@@ -27,8 +27,8 @@ async def lifespan(app: FastAPI):
 
         await get_model()
         log.info("api.embedding_warmed")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("api.embedding_warm_failed", err=str(exc))
+    except Exception:  # noqa: BLE001  # ponytail: startup must not abort on model load; broad catch intentional
+        log.warning("api.embedding_warm_failed", exc_info=True)
     yield
 
 

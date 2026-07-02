@@ -5,7 +5,10 @@ three-tier resolver, then writes the post_company_position links.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+import openai
 
 from ...db import replace_post_links, session_scope
 from ...logging import log
@@ -43,16 +46,18 @@ async def run(state: PipelineState, *, trace: Any | None = None) -> PipelineStat
             try:
                 r = await resolve_entity("company", name, trace=trace)
                 company_ids.append(r.canonical_id)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("normalize.company_failed", alias=name, err=str(exc))
+            except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:  # noqa: BLE001
+                # Layer C: one alias failing externally shouldn't abort the rest,
+                # but logic bugs bubble up. See exception-handling-layering spec.
+                log.warning("normalize.company_failed", alias=name, exc_info=True)
 
         position_ids: list[int] = []
         for name in position_names:
             try:
                 r = await resolve_entity("position", name, trace=trace)
                 position_ids.append(r.canonical_id)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("normalize.position_failed", alias=name, err=str(exc))
+            except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:  # noqa: BLE001
+                log.warning("normalize.position_failed", alias=name, exc_info=True)
 
         # Deduplicate while preserving order
         company_ids = list(dict.fromkeys(company_ids))

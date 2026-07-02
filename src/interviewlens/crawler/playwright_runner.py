@@ -22,6 +22,7 @@ from tenacity import (
 )
 
 from ..config import settings
+from ..errors import swallow
 from ..logging import log
 from .cookie import parse_cookie_header
 from .rate_limit import AsyncRateLimiter
@@ -146,12 +147,10 @@ class NowcoderFetcher:
             html = await page.content()
             title = await page.title()
             # Try to extract a more meaningful title for Nowcoder pages
-            try:
+            with swallow("fetch.h1_extract_failed", url=url):  # Layer D — UI best-effort
                 h1 = await page.locator("h1").first.text_content(timeout=2000)
                 if h1 and len(h1.strip()) > 5:
                     title = h1.strip()
-            except Exception:
-                pass
             final_url = page.url
             log.info("fetch.done", url=url, final_url=final_url, status=status, bytes=len(html))
             return FetchResult(

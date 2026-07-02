@@ -14,11 +14,12 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from .config import settings
+from .errors import aswallow, swallow
 from .logging import log
 
 try:
     from langfuse import Langfuse  # type: ignore
-except Exception:  # noqa: BLE001
+except Exception:  # noqa: BLE001  # ponytail: import-guard, broad by design
     Langfuse = None  # type: ignore
 
 
@@ -50,8 +51,8 @@ def get_langfuse() -> "Langfuse | None":
             host=settings.langfuse_host,
         )
         return _langfuse_client
-    except Exception as exc:  # noqa: BLE001
-        log.warning("langfuse.init_failed", err=str(exc))
+    except Exception:  # noqa: BLE001  # ponytail: broad catch ok — observability must not break the pipeline
+        log.warning("langfuse.init_failed", exc_info=True)
         _langfuse_init_failed = True
         return None
 
@@ -59,10 +60,8 @@ def get_langfuse() -> "Langfuse | None":
 def langfuse_flush() -> None:
     client = get_langfuse()
     if client is not None:
-        try:
+        with swallow("langfuse.flush_failed"):  # Layer A
             client.flush()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("langfuse.flush_failed", err=str(exc))
 
 
 # ------------------------------------------------------------------- Redis
@@ -87,33 +86,27 @@ _KEY_NODE_RUNS = "il:metric:node:runs"  # hash node→count
 
 
 async def incr_cache(hit: bool) -> None:
-    try:
+    async with aswallow("metric.incr_cache_failed"):  # Layer A
         r = get_redis()
         await r.incr(_KEY_CACHE_HIT if hit else _KEY_CACHE_MISS)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("metric.incr_cache_failed", err=str(exc))
 
 
 async def incr_tokens(*, prompt: int, completion: int) -> None:
-    try:
+    async with aswallow("metric.incr_tokens_failed"):  # Layer A
         r = get_redis()
         if prompt:
             await r.incrby(_KEY_TOKENS_PROMPT, prompt)
         if completion:
             await r.incrby(_KEY_TOKENS_COMPLETION, completion)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("metric.incr_tokens_failed", err=str(exc))
 
 
 async def record_node(name: str, duration_ms: float) -> None:
-    try:
+    async with aswallow("metric.record_node_failed"):  # Layer A
         r = get_redis()
         pipe = r.pipeline()
         pipe.hincrbyfloat(_KEY_NODE_DURATION, name, duration_ms)
         pipe.hincrby(_KEY_NODE_RUNS, name, 1)
         await pipe.execute()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("metric.record_node_failed", err=str(exc))
 
 
 @dataclass
@@ -161,8 +154,8 @@ async def fetch_metrics() -> MetricsSnapshot:
         pipe.hgetall(_KEY_NODE_RUNS)
         pipe.hgetall(_KEY_NODE_DURATION)
         hit, miss, tp, tc, runs, durations = await pipe.execute()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("metric.fetch_failed", err=str(exc))
+    except Exception:  # noqa: BLE001  # ponytail: broad catch ok — observability must not break the pipeline
+        log.warning("metric.fetch_failed", exc_info=True)
         return MetricsSnapshot(0, 0, 0, 0, {}, {})
 
     runs_int: dict[str, int] = {k: int(v) for k, v in (runs or {}).items()}
@@ -181,7 +174,7 @@ async def fetch_metrics() -> MetricsSnapshot:
 
 async def reset_metrics() -> None:
     r = get_redis()
-    try:
+    async with aswallow("metric.reset_failed"):  # Layer A
         await r.delete(
             _KEY_CACHE_HIT,
             _KEY_CACHE_MISS,
@@ -190,8 +183,6 @@ async def reset_metrics() -> None:
             _KEY_NODE_DURATION,
             _KEY_NODE_RUNS,
         )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("metric.reset_failed", err=str(exc))
 
 
 # ------------------------------------------------------------- Span helper
@@ -207,27 +198,20 @@ async def node_span(
     start = time.perf_counter()
     span = None
     if trace is not None:
-        try:
+        with swallow("langfuse.span_create_failed", node=node_name):  # Layer A
             span = trace.span(name=node_name, input=input_payload)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("langfuse.span_create_failed", node=node_name, err=str(exc))
-            span = None
     try:
         yield span
     except Exception as exc:
         if span is not None:
-            try:
+            with swallow("langfuse.span_end_failed", node=node_name):  # Layer A
                 span.end(level="ERROR", status_message=str(exc))
-            except Exception:  # noqa: BLE001
-                pass
         elapsed_ms = (time.perf_counter() - start) * 1000
         await record_node(node_name, elapsed_ms)
         raise
     else:
         if span is not None:
-            try:
+            with swallow("langfuse.span_end_failed", node=node_name):  # Layer A
                 span.end()
-            except Exception:  # noqa: BLE001
-                pass
         elapsed_ms = (time.perf_counter() - start) * 1000
         await record_node(node_name, elapsed_ms)

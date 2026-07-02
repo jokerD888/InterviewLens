@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import openai
 from sqlalchemy import text as sa_text
 
 from ..config import settings
 from ..db import session_scope
+from ..errors import swallow
 from ..llm.cache import cache_get, cache_set, make_cache_key
 from ..llm.deepseek import get_client
 from ..llm.prompts import build_answerer_messages
@@ -55,8 +57,9 @@ async def generate_one(
             temperature=0.3,
             max_tokens=MAX_TOKENS,
         )
-    except Exception as exc:  # noqa: BLE001
-        log.error("answer.llm_failed", err=str(exc))
+    except (openai.APIError, asyncio.TimeoutError) as exc:
+        # Layer C: external LLM failure degrades to None; logic bugs bubble.
+        log.error("answer.llm_failed", exc_info=True)
         return None
 
     answer = (resp.choices[0].message.content or "").strip()
@@ -67,7 +70,7 @@ async def generate_one(
             completion=int(usage.get("completion_tokens") or 0),
         )
     if trace is not None:
-        try:
+        with swallow("answer.trace_record_failed"):  # Layer A
             trace.generation(
                 name="answerer.answer",
                 model=settings.deepseek_model_chat,
@@ -75,8 +78,6 @@ async def generate_one(
                 output=answer,
                 usage=usage,
             ).end()
-        except Exception:  # noqa: BLE001
-            pass
 
     if answer:
         await cache_set(key, {"answer": answer})

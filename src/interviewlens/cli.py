@@ -57,7 +57,7 @@ def doctor() -> None:
                 )
                 vec = row.fetchone()
             return True, "ok (pgvector loaded)" if vec else "WARN: pgvector not enabled"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # ponytail: doctor health probe — broad catch by design
             return False, f"{type(exc).__name__}: {exc}"
 
     async def _check_redis() -> tuple[bool, str]:
@@ -68,7 +68,7 @@ def doctor() -> None:
             pong = await client.ping()
             await client.aclose()
             return True, f"ok ({pong})"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # ponytail: doctor health probe — broad catch by design
             return False, f"{type(exc).__name__}: {exc}"
 
     async def _run() -> None:
@@ -1100,7 +1100,7 @@ def task_status(task_id: str = typer.Argument(...)) -> None:
     if res.ready():
         try:
             meta.add_row("result", str(res.result)[:300])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # ponytail: task-status display — broad catch by design
             meta.add_row("result_err", str(exc))
     console.print(meta)
 

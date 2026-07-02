@@ -1,8 +1,10 @@
 """End-to-end extract orchestration: post_id → LLM → persist questions."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
+import openai
 from sqlmodel import select
 
 from ..db import (
@@ -56,8 +58,9 @@ async def extract_post(post_id: int, *, use_cache: bool = True) -> ExtractOutcom
         parsed, info = await extract_from_text(
             cleaned, post_id=post_id, use_cache=use_cache
         )
-    except Exception as exc:  # noqa: BLE001
-        log.error("extract.failed", post_id=post_id, err=str(exc))
+    except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
+        # Layer C: external LLM/JSON failure → mark failed; logic bugs bubble.
+        log.error("extract.failed", post_id=post_id, exc_info=True)
         async with session_scope() as session:
             await mark_extract_status(
                 session,

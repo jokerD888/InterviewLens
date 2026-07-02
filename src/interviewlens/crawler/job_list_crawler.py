@@ -137,8 +137,9 @@ async def crawl_job_list(
                     resp = await client.post(API_URL, headers=HEADERS, json=payload)
                     resp.raise_for_status()
                     data = resp.json()
-                except Exception as exc:
-                    log.error("job_list.request_failed", page=page, err=str(exc))
+                except (httpx.HTTPError, json.JSONDecodeError):
+                    # Layer B: network/HTTP/JSON failure → stop paging; logic bugs bubble.
+                    log.error("job_list.request_failed", page=page, exc_info=True)
                     break
 
                 if not data.get("success") or data.get("code") != 0:

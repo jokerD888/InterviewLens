@@ -8,9 +8,11 @@ the alias is written back to ``alias_dict`` so the next call short-circuits.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import numpy as np
+import openai
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
@@ -175,8 +177,11 @@ async def resolve_entity(
             max_tokens=512,
         )
         decision = result.arguments
-    except Exception as exc:  # noqa: BLE001
-        log.warning("normalize.llm_failed", alias=alias, err=str(exc))
+    except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
+        # Layer C: only external/LLM failures degrade to tier4.
+        # Logic bugs (TypeError/AttributeError/KeyError) bubble up to the DLQ —
+        # ponytail: intentional narrowing, see exception-handling-layering spec.
+        log.warning("normalize.llm_failed", alias=alias, exc_info=True)
         decision = None
 
     if decision and decision.get("decision") == "match" and decision.get("canonical_id"):

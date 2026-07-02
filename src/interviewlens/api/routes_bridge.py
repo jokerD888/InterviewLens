@@ -70,8 +70,8 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
                     {"ans": answer, "ver": settings.answer_prompt_version, "qid": qid},
                 )
                 await wsession.commit()
-        except Exception as exc:  # noqa: BLE001
-            log.error("bridge.write_answer_ai_failed", qid=qid, err=str(exc))
+        except Exception:  # noqa: BLE001  # ponytail: DB write is best-effort here; don't fail the whole bridge call
+            log.error("bridge.write_answer_ai_failed", qid=qid, exc_info=True)
 
         # Naive importance heuristic: longer question = more likely to be complex.
         score = 3

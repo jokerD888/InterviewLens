@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
+import openai
 from sqlalchemy import text as sa_text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
 from ..config import settings
@@ -22,6 +24,7 @@ from ..db import (
     session_scope,
 )
 from ..embedding import cosine_matrix, embed_texts
+from ..errors import swallow
 from ..llm.deepseek import call_tool, get_client
 from ..llm.prompts import (
     build_aggregator_messages,
@@ -225,7 +228,7 @@ async def _summarise(
             completion=int(usage_total.get("completion_tokens") or 0),
         )
     if trace is not None:
-        try:
+        with swallow("aggregate.trace_record_failed"):  # Layer A
             trace.generation(
                 name="aggregator.summary",
                 model=settings.deepseek_model_chat,
@@ -233,8 +236,6 @@ async def _summarise(
                 output=content_md,
                 usage=usage_total,
             ).end()
-        except Exception:  # noqa: BLE001
-            pass
     return content_md, usage_total
 
 
@@ -405,8 +406,10 @@ async def aggregate_all(
                     min_quality=min_quality,
                     write=write,
                 )
-            except Exception as exc:  # noqa: BLE001
-                log.error("aggregate.pair_failed", company=c_name, position=p_name, err=str(exc))
+            except (openai.APIError, SQLAlchemyError, asyncio.TimeoutError, RuntimeError):
+                # Layer C: one bucket failing externally must not abort the batch,
+                # but logic bugs (TypeError/AttributeError) bubble up.
+                log.error("aggregate.pair_failed", company=c_name, position=p_name, exc_info=True)
                 return None
 
     gathered = await asyncio.gather(*(_one(c, p) for c, p in pairs))

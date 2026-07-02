@@ -9,6 +9,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+from ..errors import swallow
 from ..observability import fetch_metrics
 from .deps import get_session
 from .schemas import HealthOut, JobsOut
@@ -28,14 +29,14 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthOut:
         ).first()
         pg_ok = True
         pgvector_ok = row is not None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # ponytail: health probe — broad catch by design
         pg_ok = False
 
     redis_ok = False
     try:
         r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
         redis_ok = bool(r.ping())
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # ponytail: health probe — broad catch by design
         redis_ok = False
 
     status = "ok" if pg_ok and redis_ok and pgvector_ok else "degraded"
@@ -55,26 +56,20 @@ def jobs() -> JobsOut:
     r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
     queues: dict[str, int] = {}
-    try:
+    with swallow("admin.jobs.queue_len_failed"):  # Layer D
         # Default Celery queue name when no routing is configured
         queues["celery"] = int(r.llen("celery") or 0)
-    except Exception:  # noqa: BLE001
-        pass
 
     dlq: dict[str, int] = {}
-    try:
+    with swallow("admin.jobs.dlq_scan_failed"):  # Layer D
         for key in r.scan_iter(match="il:dlq:*"):
             dlq[key] = int(r.llen(key) or 0)
-    except Exception:  # noqa: BLE001
-        pass
 
     workers: list[str] = []
-    try:
+    with swallow("admin.jobs.workers_failed"):  # Layer D — Celery inspect may timeout
         insp: Inspect = celery_app.control.inspect(timeout=1.0)
         active = insp.active() or {}
         workers = list(active.keys())
-    except Exception:  # noqa: BLE001
-        workers = []
 
     return JobsOut(queues=queues, dlq=dlq, workers=workers)
 
@@ -127,6 +122,6 @@ def list_dlq(task_name: str, limit: int = 50) -> dict:
     for x in raw:
         try:
             items.append(json.loads(x))
-        except Exception:  # noqa: BLE001
+        except json.JSONDecodeError:
             items.append({"raw": x})
     return {"task_name": task_name, "count": len(items), "items": items}

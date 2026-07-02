@@ -62,8 +62,8 @@ async def resume_failed(
                     "errors": final.get("errors", []),
                     "extracted": bool(final.get("extracted")),
                 }
-            except Exception as exc:  # noqa: BLE001
-                log.error("resume.row_failed", post_id=row.id, err=str(exc))
+            except Exception as exc:  # noqa: BLE001  # ponytail: one post failing must not abort batch resume; broad catch intentional
+                log.error("resume.row_failed", post_id=row.id, exc_info=True)
                 return {"post_id": row.id, "url": row.source_url, "errors": [str(exc)]}
 
     try:

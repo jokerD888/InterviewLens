@@ -1,7 +1,10 @@
 """Extractor node — wraps llm.extract_from_text for the graph."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+import openai
 
 from ...db import mark_extract_status, session_scope
 from ...db.repositories import replace_questions
@@ -42,8 +45,10 @@ async def run(
             parsed, info = await extract_from_text(
                 cleaned, post_id=post_id, use_cache=use_cache, trace=trace
             )
-        except Exception as exc:  # noqa: BLE001
-            log.error("node.extractor.failed", post_id=post_id, err=str(exc))
+        except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
+            # Layer C: external LLM/JSON failure → mark post failed, skip;
+            # logic bugs (TypeError/AttributeError) bubble up to the DLQ.
+            log.error("node.extractor.failed", post_id=post_id, exc_info=True)
             async with session_scope() as session:
                 await mark_extract_status(
                     session,
