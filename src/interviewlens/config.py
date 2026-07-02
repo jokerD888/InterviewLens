@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     extract_prompt_version: int = 1
     answer_prompt_version: int = 1
 
+    # ---- Search cache (read-path optimisation for /posts/search) ----
+    search_cache_enabled: bool = True
+    search_embed_ttl_seconds: int = 86_400   # 24h — embedding only depends on text + model
+    search_result_ttl_seconds: int = 1_800   # 30min — full result depends on data too
+
     # ---- Bridge to daily-interview-prep ----
     daily_prep_api_url: str = "http://localhost:8000/api"
     daily_prep_token: str = ""
