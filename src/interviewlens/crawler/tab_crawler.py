@@ -177,6 +177,7 @@ async def crawl_tab(
     output_path: str | None = None,
     save_to_db: bool = False,
     delay: float = DEFAULT_DELAY,
+    stop_when_seen: bool = False,
 ) -> list[dict]:
     """Crawl posts from the tab/content API.
 
@@ -188,6 +189,12 @@ async def crawl_tab(
         output_path: if set, writes each post as JSON Line immediately.
         save_to_db: if True, also persists posts to the PostgreSQL posts table.
         delay: seconds between detail page requests.
+        stop_when_seen: incremental watermark for daily updates. When True,
+            records whose URL already exists in the DB are dropped from the
+            work-list, and discovery stops after 2 consecutive pages yield no
+            new posts. Because the tab API is newest-first, this catches up to
+            the previous run's high-water mark without a time cursor (robust to
+            Nowcoder's pinned/recommended reordering).
 
     Returns:
         list of post dicts with full content.
@@ -227,10 +234,16 @@ async def crawl_tab(
                 new = 0
                 for r in records:
                     cid = str(r.get("contentId") or r.get("momentData", {}).get("id", ""))
-                    if cid not in seen_ids:
-                        seen_ids.add(cid)
-                        all_records.append(r)
-                        new += 1
+                    if cid in seen_ids:
+                        continue
+                    seen_ids.add(cid)
+                    if stop_when_seen:
+                        # Incremental mode: skip posts already persisted.
+                        detail_url = build_detail_url(r)
+                        if detail_url and await _url_exists_in_db(detail_url):
+                            continue
+                    all_records.append(r)
+                    new += 1
 
                 log.info("tab_crawler.page", page_no=page_no, records=len(records), new=new, total=len(all_records))
 
@@ -295,6 +308,16 @@ async def crawl_tab(
 
     log.info("tab_crawler.done", posts=len(results), fixed_titles=fixed_titles)
     return results
+
+
+async def _url_exists_in_db(url: str) -> bool:
+    """True if a post with this source_url is already persisted."""
+    from sqlalchemy import select
+
+    async with session_scope() as s:
+        return (
+            await s.execute(select(Post.id).where(Post.source_url == url))
+        ).first() is not None
 
 
 async def _persist_post(post: dict) -> int | None:

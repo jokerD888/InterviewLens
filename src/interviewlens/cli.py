@@ -897,6 +897,34 @@ def tab_crawl(
     asyncio.run(_run())
 
 
+# ------------------------------------------------------- daily-update
+@app.command(name="daily-update")
+def daily_update_cmd(
+    no_answers: bool = typer.Option(False, "--no-answers", help="Skip AI answer generation (saves tokens)"),
+) -> None:
+    """Full daily update: incremental crawl → extract → aggregate → answer.
+
+    Serial, idempotent, reentrancy-locked. Wire this to the OS scheduler
+    (Windows Task Scheduler / cron) to keep the site fresh without downtime —
+    read caches expire within 1h, so users see new content on next refresh.
+
+    Example (Windows Task Scheduler action):
+        uv run --directory D:\\code\\personal_learn\\InterviewLens il daily-update
+    """
+    from .tasks.daily import daily_update
+
+    async def _run() -> None:
+        summary = await daily_update(with_answers=not no_answers)
+        table = Table(title="daily-update", show_header=False)
+        table.add_column("k", style="cyan")
+        table.add_column("v")
+        for k, v in summary.items():
+            table.add_row(k, str(v))
+        console.print(table)
+
+    asyncio.run(_run())
+
+
 # ------------------------------------------------------- import-crawl
 @app.command(name="import-crawl")
 def import_crawl(
