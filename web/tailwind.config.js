@@ -1,24 +1,26 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./src/**/*.{ts,tsx}"],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
         // Archival / editorial palette — warm paper, ink, oxidised-rust accent.
-        // Token names kept stable (bg/panel/ink/...) so component classes don't churn.
-        bg: "hsl(40 33% 95%)", // warm paper
-        paper: "hsl(40 33% 95%)",
-        panel: "hsl(38 30% 91%)", // raised card / sidebar wash
-        sunk: "hsl(38 26% 87%)", // inset wells
-        border: "hsl(34 20% 80%)", // hairline rules
-        rule: "hsl(30 14% 70%)", // stronger editorial rule
-        muted: "hsl(28 10% 44%)", // secondary ink
-        ink: "hsl(26 22% 15%)", // primary ink
-        accent: "hsl(12 66% 46%)", // oxidised rust
-        "accent-ink": "hsl(12 60% 34%)", // rust pressed / text-on-paper
-        good: "hsl(150 40% 35%)",
-        warn: "hsl(34 72% 42%)",
-        bad: "hsl(2 62% 47%)",
+        // Values are stored as HSL *channels* in CSS variables (see globals.css)
+        // so Tailwind alpha modifiers (bg-ink/80) and the `dark` class both work.
+        bg: "hsl(var(--c-bg) / <alpha-value>)",
+        paper: "hsl(var(--c-paper) / <alpha-value>)",
+        panel: "hsl(var(--c-panel) / <alpha-value>)",
+        sunk: "hsl(var(--c-sunk) / <alpha-value>)",
+        border: "hsl(var(--c-border) / <alpha-value>)",
+        rule: "hsl(var(--c-rule) / <alpha-value>)",
+        muted: "hsl(var(--c-muted) / <alpha-value>)",
+        ink: "hsl(var(--c-ink) / <alpha-value>)",
+        accent: "hsl(var(--c-accent) / <alpha-value>)",
+        "accent-ink": "hsl(var(--c-accent-ink) / <alpha-value>)",
+        good: "hsl(var(--c-good) / <alpha-value>)",
+        warn: "hsl(var(--c-warn) / <alpha-value>)",
+        bad: "hsl(var(--c-bad) / <alpha-value>)",
       },
       fontFamily: {
         // display = characterful serif for mastheads & headings (Fraunces).
@@ -30,7 +32,7 @@ module.exports = {
         sans: ['"Newsreader"', '"Noto Serif SC"', "Georgia", "serif"],
       },
       boxShadow: {
-        card: "0 1px 0 hsl(34 20% 80%), 0 1px 2px hsl(30 30% 30% / 0.04)",
+        card: "0 1px 0 hsl(var(--c-border)), 0 1px 2px hsl(30 30% 30% / 0.04)",
         lift: "0 8px 30px -12px hsl(26 40% 20% / 0.18)",
       },
       letterSpacing: {

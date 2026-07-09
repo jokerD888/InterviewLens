@@ -937,7 +937,7 @@ def import_crawl(
     Use --force to overwrite cleaned_text and reset status for all posts.
     """
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone, timedelta
     from .db import Post, session_scope
 
     async def _run() -> None:
@@ -970,7 +970,11 @@ def import_crawl(
                 posted_at = None
                 if p.get("created_at"):
                     try:
-                        posted_at = datetime.strptime(p["created_at"], "%Y-%m-%d %H:%M")
+                        # created_at is a Beijing wall-clock string; tag it as UTC+8
+                        # so it stores correctly (as UTC) in the timestamptz column.
+                        posted_at = datetime.strptime(p["created_at"], "%Y-%m-%d %H:%M").replace(
+                            tzinfo=timezone(timedelta(hours=8))
+                        )
                     except ValueError:
                         pass
 

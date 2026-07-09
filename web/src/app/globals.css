@@ -4,12 +4,46 @@
 
 :root {
   color-scheme: light;
+  /* Archival / editorial palette — warm paper, ink, oxidised-rust accent.
+     HSL channels so Tailwind alpha modifiers (bg-ink/80) and the `dark`
+     class both resolve through these variables. */
+  --c-bg: 40 33% 95%;
+  --c-paper: 40 33% 95%;
+  --c-panel: 38 30% 91%;
+  --c-sunk: 38 26% 87%;
+  --c-border: 34 20% 80%;
+  --c-rule: 30 14% 70%;
+  --c-muted: 28 10% 44%;
+  --c-ink: 26 22% 15%;
+  --c-accent: 12 66% 46%;
+  --c-accent-ink: 12 60% 34%;
+  --c-good: 150 40% 35%;
+  --c-warn: 34 72% 42%;
+  --c-bad: 2 62% 47%;
+}
+
+:root.dark {
+  color-scheme: dark;
+  /* Editorial night mode — warm charcoal ground, rust accent lifted for legibility. */
+  --c-bg: 30 12% 9%;
+  --c-paper: 30 12% 9%;
+  --c-panel: 30 11% 13%;
+  --c-sunk: 30 10% 17%;
+  --c-border: 30 9% 22%;
+  --c-rule: 30 8% 30%;
+  --c-muted: 33 10% 60%;
+  --c-ink: 40 28% 92%;
+  --c-accent: 12 72% 58%;
+  --c-accent-ink: 14 80% 72%;
+  --c-good: 150 38% 56%;
+  --c-warn: 34 72% 60%;
+  --c-bad: 2 68% 62%;
 }
 
 html,
 body {
-  background: theme(colors.bg);
-  color: theme(colors.ink);
+  background: hsl(var(--c-bg));
+  color: hsl(var(--c-ink));
   font-family: theme(fontFamily.serif);
 }
 
@@ -35,9 +69,17 @@ body::before {
     1px 2px;
 }
 
+/* Night grain — dimmer, cooler speckle so the dark ground keeps texture
+   without washing out. */
+:root.dark body::before {
+  background-image:
+    radial-gradient(hsl(30 10% 35% / 0.18) 1px, transparent 1px),
+    radial-gradient(hsl(30 10% 35% / 0.12) 1px, transparent 1px);
+}
+
 ::selection {
-  background: theme(colors.accent / 22%);
-  color: theme(colors.ink);
+  background: hsl(var(--c-accent) / 22%);
+  color: hsl(var(--c-ink));
 }
 
 /* Scrollbar — slim, paper-toned */
@@ -49,12 +91,12 @@ body::before {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: theme(colors.rule);
-  border: 3px solid theme(colors.bg);
+  background: hsl(var(--c-rule));
+  border: 3px solid hsl(var(--c-bg));
   border-radius: 8px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: theme(colors.muted);
+  background: hsl(var(--c-muted));
 }
 
 /* ---- Staggered page-load reveal -------------------------------------- */
@@ -94,13 +136,13 @@ body::before {
   font-family: theme(fontFamily.serif);
   font-size: 1.0625rem;
   line-height: 1.75;
-  color: theme(colors.ink);
+  color: hsl(var(--c-ink));
 }
 .prose-il h1,
 .prose-il h2,
 .prose-il h3 {
   font-family: theme(fontFamily.display);
-  color: theme(colors.ink);
+  color: hsl(var(--c-ink));
   font-weight: 600;
   letter-spacing: -0.01em;
   margin-top: 1.75rem;
@@ -109,32 +151,32 @@ body::before {
 .prose-il h2 {
   font-size: 1.35rem;
   padding-bottom: 0.3rem;
-  border-bottom: 1px solid theme(colors.border);
+  border-bottom: 1px solid hsl(var(--c-border));
 }
 .prose-il h3 {
   font-size: 1.12rem;
-  color: theme(colors.accent-ink);
+  color: hsl(var(--c-accent-ink));
 }
 .prose-il p {
   margin-bottom: 0.7rem;
 }
 .prose-il blockquote {
-  border-left: 3px solid theme(colors.accent);
+  border-left: 3px solid hsl(var(--c-accent));
   padding: 0.1rem 0 0.1rem 0.9rem;
   margin: 0.8rem 0;
-  color: theme(colors.muted);
+  color: hsl(var(--c-muted));
   font-style: italic;
 }
 .prose-il code {
   font-family: theme(fontFamily.mono);
-  background: theme(colors.sunk);
+  background: hsl(var(--c-sunk));
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
   font-size: 0.82em;
 }
 .prose-il pre {
-  background: theme(colors.sunk);
-  border: 1px solid theme(colors.border);
+  background: hsl(var(--c-sunk));
+  border: 1px solid hsl(var(--c-border));
   border-radius: 6px;
   padding: 0.9rem;
   overflow-x: auto;
@@ -159,7 +201,7 @@ body::before {
   content: "—";
   position: absolute;
   left: -1.3rem;
-  color: theme(colors.accent);
+  color: hsl(var(--c-accent));
 }
 .prose-il ol {
   list-style: decimal;
@@ -168,7 +210,7 @@ body::before {
   margin: 0.3rem 0;
 }
 .prose-il a {
-  color: theme(colors.accent-ink);
+  color: hsl(var(--c-accent-ink));
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -180,12 +222,12 @@ body::before {
 }
 .prose-il th,
 .prose-il td {
-  border: 1px solid theme(colors.border);
+  border: 1px solid hsl(var(--c-border));
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
 .prose-il th {
-  background: theme(colors.panel);
+  background: hsl(var(--c-panel));
   font-family: theme(fontFamily.mono);
   font-size: 0.78em;
   text-transform: uppercase;
@@ -193,7 +235,7 @@ body::before {
 }
 .prose-il sub {
   font-size: 0.65em;
-  color: theme(colors.muted / 0.45);
+  color: hsl(var(--c-muted) / 0.45);
   font-weight: 300;
   vertical-align: sub;
   line-height: 0;

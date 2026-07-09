@@ -1,6 +1,7 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { ThemeToggle } from "../components/theme-toggle";
 
 export const metadata: Metadata = {
   title: "InterviewLens — 面经档案馆",
@@ -13,6 +14,13 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <head>
+        {/* Apply persisted/system theme before paint to avoid a flash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('il-theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}if(t==='dark'){document.documentElement.classList.add('dark');}}catch(e){}})();",
+          }}
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* Fraunces (display serif), Newsreader (body serif), IBM Plex Mono (chrome),
@@ -60,6 +68,7 @@ function Masthead() {
           >
             GitHub ↗
           </a>
+          <ThemeToggle />
         </nav>
       </div>
       {/* Sub-rule with a fine editorial double line */}

@@ -337,7 +337,10 @@ async def _persist_post(post: dict) -> int | None:
         posted_at = None
         if created_str:
             try:
-                posted_at = datetime.strptime(created_str, "%Y-%m-%d %H:%M")
+                # created_at is a Beijing wall-clock string; tag it as UTC+8 so it
+                # stores correctly (as UTC) in the timestamptz column instead of
+                # being treated as UTC and gaining an extra 8h downstream.
+                posted_at = datetime.strptime(created_str, "%Y-%m-%d %H:%M").replace(tzinfo=UTC8)
             except ValueError:
                 pass
 
