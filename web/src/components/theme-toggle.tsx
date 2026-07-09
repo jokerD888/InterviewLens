@@ -1,28 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "il-theme";
-
-function systemPrefersDark(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
-}
 
 /**
  * Sun/moon toggle that flips the `.dark` class on <html> and persists the
  * choice in localStorage. The actual theme is applied pre-hydration by an
  * inline script in layout.tsx (avoids a flash of the wrong theme).
+ *
+ * To avoid a hydration mismatch, the initial render does NOT read the DOM:
+ * both the server and the first client render show the moon icon with a
+ * neutral title. The real theme is read in useEffect (after mount) and the
+ * icon/title update on the second render — no SSR/CSR diff.
  */
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<"light" | "dark">(() =>
-    typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark")
-      ? "dark"
-      : "light"
-  );
+  const [mounted, setMounted] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const isDark = document.documentElement.classList.contains("dark");
+    setTheme(isDark ? "dark" : "light");
+    setMounted(true);
+  }, []);
 
   const toggle = () => {
     const next: "light" | "dark" = theme === "dark" ? "light" : "dark";
@@ -35,15 +35,17 @@ export function ThemeToggle() {
     document.documentElement.classList.toggle("dark", next === "dark");
   };
 
+  const isDark = theme === "dark";
+
   return (
     <button
       type="button"
       onClick={toggle}
       aria-label="切换深色 / 浅色模式"
-      title={theme === "dark" ? "切换到浅色" : "切换到深色"}
+      title={mounted ? (isDark ? "切换到浅色" : "切换到深色") : "切换主题"}
       className="ml-2 flex h-7 w-7 items-center justify-center rounded-full border border-rule/50 text-muted transition hover:border-ink hover:text-ink"
     >
-      {theme === "dark" ? (
+      {mounted && isDark ? (
         <svg
           width="14"
           height="14"
