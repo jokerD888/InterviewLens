@@ -1,4 +1,4 @@
-"""Normalizer package: entity normalisation across alias_dict + embedding + LLM."""
+"""Normalizer package: alias-table + pgvector + LLM entity normalisation."""
 from .resolver import (
     EMBED_THRESHOLD_HIGH,
     EMBED_THRESHOLD_LOW,

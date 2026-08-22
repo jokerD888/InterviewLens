@@ -1,5 +1,5 @@
 -- ============================================================
--- InterviewLens · Initial schema (v1)
+-- InterviewLens · Initial schema (current)
 -- Auto-loaded by docker-compose on first postgres startup.
 -- ============================================================
 
@@ -13,8 +13,12 @@ CREATE TABLE IF NOT EXISTS companies (
     id          BIGSERIAL PRIMARY KEY,
     canonical   TEXT NOT NULL UNIQUE,
     industry    TEXT,
+    embedding   vector(1024),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_companies_embedding
+    ON companies USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 -- ----------------------------------------------------------------
 -- positions
@@ -24,8 +28,12 @@ CREATE TABLE IF NOT EXISTS positions (
     canonical   TEXT NOT NULL UNIQUE,
     category    TEXT,
     level       TEXT,
+    embedding   vector(1024),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_positions_embedding
+    ON positions USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 
 -- ----------------------------------------------------------------
 -- posts
@@ -103,19 +111,27 @@ CREATE INDEX IF NOT EXISTS idx_summaries_lookup
     ON summaries(company_id, position_id, period);
 
 -- ----------------------------------------------------------------
--- alias_dict (self-learning)
+-- Entity-specific alias tables (self-learning)
 -- ----------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS alias_dict (
+CREATE TABLE IF NOT EXISTS company_aliases (
     id            BIGSERIAL PRIMARY KEY,
-    entity_type   TEXT NOT NULL CHECK (entity_type IN ('company', 'position')),
     alias         TEXT NOT NULL,
-    canonical_id  BIGINT NOT NULL,
+    company_id    BIGINT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     confidence    REAL NOT NULL DEFAULT 1.0,
     learned_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (entity_type, alias)
+    UNIQUE (alias)
 );
-CREATE INDEX IF NOT EXISTS idx_alias_lookup ON alias_dict(entity_type, alias);
-CREATE INDEX IF NOT EXISTS idx_alias_canonical ON alias_dict(entity_type, canonical_id);
+CREATE INDEX IF NOT EXISTS idx_company_alias_canonical ON company_aliases(company_id);
+
+CREATE TABLE IF NOT EXISTS position_aliases (
+    id            BIGSERIAL PRIMARY KEY,
+    alias         TEXT NOT NULL,
+    position_id   BIGINT NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+    confidence    REAL NOT NULL DEFAULT 1.0,
+    learned_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (alias)
+);
+CREATE INDEX IF NOT EXISTS idx_position_alias_canonical ON position_aliases(position_id);
 
 -- ----------------------------------------------------------------
 -- Convenience view: post stats per company × position

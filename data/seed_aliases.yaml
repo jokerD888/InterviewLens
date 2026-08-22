@@ -1,5 +1,5 @@
 # Seed alias dictionary for InterviewLens
-# Loaded at startup to bootstrap alias_dict table.
+# Loaded by `il seed-aliases` to bootstrap the entity-specific alias tables.
 # Format: entity_type → list of {canonical, aliases: [...]}.
 
 company:

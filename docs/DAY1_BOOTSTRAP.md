@@ -58,13 +58,15 @@ uv run il doctor
 
 # 4.3 灌入种子别名词典
 uv run il seed-aliases
+# 4.4 回填 canonical embedding（首次迁移或新增失败行后执行）
+uv run il backfill-canonical-embeddings
 ```
 
 `seed-aliases` 跑完后验证：
 ```bash
 docker exec -it il-postgres psql -U il -d interviewlens \
-  -c "SELECT entity_type, COUNT(*) FROM alias_dict GROUP BY entity_type;"
-# 应该看到 company / position 各几十条
+  -c "SELECT 'company' AS entity_type, COUNT(*) FROM company_aliases UNION ALL SELECT 'position', COUNT(*) FROM position_aliases;"
+# 应该看到 company / position 各几十条；canonical embedding 不应长期为 NULL
 ```
 
 ## 5. 跑测试

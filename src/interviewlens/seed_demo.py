@@ -14,7 +14,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
 from .db import (
-    AliasDict,
     Company,
     Position,
     Post,

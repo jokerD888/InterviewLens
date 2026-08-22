@@ -60,7 +60,7 @@
 
 ### 2.1 ER 关系
 
-主要实体共 7 个：`companies`、`positions`、`posts`、`questions`、`post_company_position`（关联表）、`summaries`、`alias_dict`。
+主要实体包括 `companies`、`positions`、`posts`、`questions`、`post_company_position`（关联表）、`summaries`、`company_aliases` 和 `position_aliases`。
 
 ```
 companies ──┐                             ┌── positions
@@ -72,7 +72,8 @@ companies ──┐                             ┌── positions
                        │
             summaries (按 company×position×period 聚合)
 
-alias_dict (公司/岗位别名 → canonical_id，自学习)
+company_aliases (公司别名 → companies.id，自学习)
+position_aliases (岗位别名 → positions.id，自学习)
 ```
 
 ### 2.2 完整建表 SQL
@@ -87,8 +88,11 @@ CREATE TABLE companies (
     id           BIGSERIAL PRIMARY KEY,
     canonical    TEXT NOT NULL UNIQUE,         -- 规范名: "字节跳动"
     industry     TEXT,                          -- 互联网/金融/...
+    embedding    vector(1024),                  -- canonical 名称向量
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_companies_embedding ON companies
+    USING hnsw (embedding vector_cosine_ops);
 
 -- 岗位主表
 CREATE TABLE positions (
@@ -96,8 +100,11 @@ CREATE TABLE positions (
     canonical    TEXT NOT NULL UNIQUE,         -- "后端开发"
     category     TEXT,                          -- 后端/前端/算法/测试...
     level        TEXT,                          -- 实习/校招/社招
+    embedding    vector(1024),                  -- canonical 名称向量
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_positions_embedding ON positions
+    USING hnsw (embedding vector_cosine_ops);
 
 -- 面经原文
 CREATE TABLE posts (
@@ -154,28 +161,39 @@ CREATE TABLE summaries (
     UNIQUE (company_id, position_id, period)
 );
 
--- 别名词典（自学习）
-CREATE TABLE alias_dict (
+-- 公司别名（自学习；真实外键）
+CREATE TABLE company_aliases (
     id            BIGSERIAL PRIMARY KEY,
-    entity_type   TEXT NOT NULL,                -- 'company' | 'position'
     alias         TEXT NOT NULL,
-    canonical_id  BIGINT NOT NULL,              -- 指向 companies/positions.id
+    company_id    BIGINT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     confidence    REAL DEFAULT 1.0,             -- LLM 学到的低分；人工标注 1.0
     learned_at    TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (entity_type, alias)
+    UNIQUE (alias)
 );
-CREATE INDEX idx_alias_lookup ON alias_dict(entity_type, alias);
+CREATE INDEX idx_company_alias_canonical ON company_aliases(company_id);
+
+-- 岗位别名（自学习；真实外键）
+CREATE TABLE position_aliases (
+    id            BIGSERIAL PRIMARY KEY,
+    alias         TEXT NOT NULL,
+    position_id   BIGINT NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+    confidence    REAL DEFAULT 1.0,
+    learned_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (alias)
+);
+CREATE INDEX idx_position_alias_canonical ON position_aliases(position_id);
 ```
 
-`alias_dict.canonical_id` 是根据 `entity_type` 指向 `companies` 或 `positions` 的多态引用，当前数据库无法为它声明真实外键。Resolver 会在接受 LLM 返回的 `canonical_id` 前校验对应实体表；长期治理可拆成公司别名表和岗位别名表，以获得数据库级引用完整性。
+别名表拆开后，`company_id` / `position_id` 可以声明真实外键，不再依赖 `entity_type + canonical_id` 的多态引用。canonical embedding 由迁移后的回填命令生成，Normalizer 的 embedding tier 使用 pgvector HNSW Top-K，不再在应用层读取并重新编码全部 canonical 名称。
 
 ### 2.3 设计要点
 
 - **`extract_version`**：prompt 改版后扫表把 `version < 当前` 的全部重抽，避免历史数据污染。
 - **`post_company_position` 多对多**：少数面经会同时讲多家公司，不要一对一卡死。
 - **`embedding` 放在 `questions` 而非 `posts`**：搜索粒度是题目，不是整篇。
+- **canonical embedding 放在 `companies` / `positions`**：归一化只需对候选 canonical 做向量近邻查询。
 - **`summaries` 预计算**：摘要由 Aggregator 离线生成，Web 直查不再调 LLM。
-- **HNSW 索引**：百万级 questions 召回 < 50ms。
+- **HNSW 索引**：题目搜索和 canonical 召回都在 PostgreSQL 内完成；当前仓库没有真实压测，不承诺固定延迟。
 
 ## 3. Agent 流水线详解（LangGraph）
 
@@ -201,7 +219,7 @@ class PipelineState(TypedDict):
 | **Crawler** | `url` | `raw_html` | 写 `posts.raw_html`；URL 已存在则早退 |
 | **Cleaner** | `raw_html` | `cleaned_text` | 写 `posts.cleaned_text`；< 200 字早退 |
 | **Extractor** | `cleaned_text` | `extracted` JSON | DeepSeek Function Calling，强制 schema |
-| **Normalizer** | `extracted` | `normalized` ids | 查 `alias_dict`→ miss 调 LLM → 写回字典 |
+| **Normalizer** | `extracted` | `normalized` ids | 查实体别名表 → pgvector Top-K → miss 调 LLM → 写回对应别名表 |
 | **Scorer** | `extracted` | `content_score` | 写稳定内容分；freshness 在查询时根据 `posted_at` 动态计算 |
 | **Aggregator** | （离线触发） | `summaries.content_md` | 按 (c,p,period) 分桶后跑 |
 
@@ -216,9 +234,9 @@ URL 入队 → Celery worker
   │    ├─ Redis cache check (key=hash(text))
   │    └─ miss → LLM 调用 → 缓存 + 落库
   ├─ Normalizer
-  │    ├─ alias_dict 直查命中 → 返回 id
-  │    └─ miss → bge-m3 与已有 canonical 计算相似度
-  │              ├─ ≥ 0.85 → 同一实体，写 alias_dict
+  │    ├─ company_aliases / position_aliases 直查命中 → 返回 id
+  │    └─ miss → bge-m3 查询 canonical embedding 的 Top-K
+  │              ├─ ≥ 0.85 → 同一实体，写回对应别名表
   │              └─ < 0.85 → LLM 判定 → 新建 canonical
   ├─ Scorer (规则函数，纯本地)
   └─ 写 questions + post_company_position
@@ -234,7 +252,7 @@ URL 入队 → Celery worker
 ### 3.4 容错与可观测
 
 - **Redis 缓存 key**：`extract:{sha256(cleaned_text)}:{prompt_version}`
-- **重试策略**：Crawler 网络错误 3 次指数退避；Extractor JSON 解析失败 2 次（第二次降温度到 0）
+- **重试策略**：Crawler 网络错误 3 次指数退避；Extractor 由 `call_tool` 做最多 3 次重试；Aggregator 对 API/网络错误做最多 3 次传输重试，对空/非法/不符合业务 schema 的输出追加 1 次纠正提示重试（第二次降温度到 0）
 - **Langfuse**：每个节点开 span，Extractor 记录 token 数、耗时、prompt 版本
 - **断点续跑**：Celery 任务幂等，按 `posts.extract_status` 重新调度未完成节点
 
@@ -299,7 +317,7 @@ InterviewLens/
 |---|---|---|
 | 牛客封号/封 IP | 抓取中断 | 单线程 1-2 req/s + 随机 sleep；备用账号 |
 | Cookie 过期 | 抓取失败 | 启动健康检查；过期写 Slack/邮件提醒 |
-| LLM 输出 schema 漂移 | 入库脏数据 | Pydantic 校验；失败入死信队列人工看 |
+| LLM 输出 schema 漂移 | 入库脏数据 | Extractor/Aggregator 均做 Pydantic 校验；失败不写入摘要，由任务边界重试或进入死信队列 |
 | 别名误归一 | 数据污染 | 低置信度 alias 标记 `confidence < 0.9`，定期人工抽检 |
 | 摘要幻觉 | 误导面试准备 | Aggregator 强制引用题目原文，不让 LLM 自由发挥 |
 

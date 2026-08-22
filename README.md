@@ -14,6 +14,7 @@ InterviewLens 是一个面向个人秋招准备的面经知识库：把牛客等
 | 动态推荐 | 根据原始发布时间 `posted_at` 计算 freshness，推荐场景使用 `ranking_score` |
 | 语义搜索 | 题目级 embedding + PostgreSQL pgvector/HNSW |
 | 面经聚合 | 按公司、岗位、季度或全部数据聚类去重，统计真实出现频次，再由 LLM 生成 Markdown 摘要 |
+| 摘要可靠性 | JSON mode + `json-repair` + `AggregatorResult` Pydantic 校验，题目引用回查输入，失败有限重试且不落坏数据 |
 | 批量处理 | Celery Worker、失败恢复、重试和 DLQ |
 | 可观测性 | Langfuse trace、Redis 缓存、Token 用量和节点耗时统计 |
 | 使用入口 | CLI、FastAPI REST API、Next.js Web 界面 |
@@ -33,7 +34,7 @@ Cleaner       去噪、提取正文、短文本过滤
 Extractor     DeepSeek Function Calling → 公司/岗位/轮次/问题
     │
     ▼
-Normalizer    alias_dict → embedding → LLM 兜底
+Normalizer    company_aliases / position_aliases → pgvector → LLM 兜底
     │
     ▼
 Scorer        计算稳定 content_score 并写入数据库
@@ -100,6 +101,7 @@ docker compose up -d --build
 ```bash
 docker compose exec api uv run il doctor
 docker compose exec api uv run il seed-aliases
+docker compose exec api uv run il backfill-canonical-embeddings
 ```
 
 如果只想立即查看界面，可以导入演示数据：
@@ -114,19 +116,24 @@ docker compose exec api uv run il seed-demo
 - API 文档：<http://localhost:8000/docs>
 - Langfuse：<http://localhost:3001>
 
-### 已有数据库的评分迁移
+### 已有数据库的迁移
 
-`sql/001_init.sql` 只会在 PostgreSQL 数据卷首次创建时自动执行。已有数据库需要手动执行一次（下面两种导入方式二选一）：
+`sql/001_init.sql` 只会在 PostgreSQL 数据卷首次创建时自动执行。已有数据库需要按顺序执行尚未执行的迁移（下面两种导入方式二选一）：
 
 ```bash
 # macOS / Linux
 docker compose exec -T postgres psql -U il -d interviewlens < sql/003_content_score.sql
+docker compose exec -T postgres psql -U il -d interviewlens < sql/004_split_aliases_canonical_embeddings.sql
 # PowerShell
 Get-Content sql/003_content_score.sql | docker compose exec -T postgres psql -U il -d interviewlens
+Get-Content sql/004_split_aliases_canonical_embeddings.sql | docker compose exec -T postgres psql -U il -d interviewlens
 docker compose exec api uv run il rescore --all
+docker compose exec api uv run il seed-aliases
+docker compose exec api uv run il backfill-canonical-embeddings
 ```
 
 迁移不会直接复制旧的 `quality_score`，因为旧分数可能已经包含时间衰减，无法无损还原为内容分。
+`004` 会把旧 `alias_dict` 按实体类型迁移到 `company_aliases` 和 `position_aliases`，同时为 `companies` / `positions` 增加向量列和 HNSW 索引；迁移前会检查孤儿 canonical 引用，发现异常时整笔事务回滚。
 
 ## 常用工作流
 
@@ -169,6 +176,9 @@ docker compose exec api uv run il dlq drain --limit 50
 ```bash
 # 给题目生成 embedding
 docker compose exec api uv run il backfill-embeddings
+
+# 给公司/岗位 canonical 名称生成 embedding，供归一化的 pgvector Top-K 查询使用
+docker compose exec api uv run il backfill-canonical-embeddings
 
 # 聚合一个公司/岗位/季度
 docker compose exec api uv run il aggregate \
@@ -227,9 +237,9 @@ docker compose exec api uv run il daily-update
 
 - `posts`：原始面经、发布时间、抓取时间、抽取状态和稳定内容分。
 - `questions`：面试问题、答案要点、AI 答案和题目 embedding。
-- `companies` / `positions`：规范化公司和岗位。
+- `companies` / `positions`：规范化公司和岗位，以及 canonical embedding。
 - `post_company_position`：面经与公司/岗位的关联。
-- `alias_dict`：实体别名到 canonical 的复用映射。
+- `company_aliases` / `position_aliases`：带真实外键的实体别名复用映射。
 - `summaries`：Aggregator 生成的预计算摘要。
 
 向量和关系数据都放在 PostgreSQL 中，搜索时可以同时做实体过滤和向量相似度查询，避免额外维护一套向量数据库。
@@ -240,7 +250,7 @@ docker compose exec api uv run il daily-update
 src/interviewlens/
 ├── agent/          # LangGraph 状态和五个节点
 ├── crawler/        # 单篇、列表和增量抓取
-├── normalizer/     # alias/embedding/LLM 实体归一
+├── normalizer/     # entity alias/pgvector/LLM 实体归一
 ├── scoring/        # content_score、freshness 和 ranking 计算
 ├── aggregator/     # embedding 聚类去重和 LLM 摘要
 ├── answerer/       # 离线生成题目 AI 答案
@@ -251,7 +261,8 @@ src/interviewlens/
 sql/
 ├── 001_init.sql             # 初始 schema
 ├── 002_answer_ai.sql        # AI 答案字段
-└── 003_content_score.sql    # 内容分迁移
+├── 003_content_score.sql    # 内容分迁移
+└── 004_split_aliases_canonical_embeddings.sql  # 别名拆表与 canonical 向量迁移
 
 web/                         # Next.js 前端
 tests/                       # 单元测试和行为测试

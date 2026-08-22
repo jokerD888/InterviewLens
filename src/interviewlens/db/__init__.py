@@ -1,8 +1,9 @@
 """DB layer entrypoints."""
 from .models import (
-    AliasDict,
     Company,
+    CompanyAlias,
     Position,
+    PositionAlias,
     Post,
     PostCompanyPosition,
     Question,
@@ -21,9 +22,10 @@ from .repositories import (
 from .session import get_engine, get_session_factory, session_scope
 
 __all__ = [
-    "AliasDict",
     "Company",
+    "CompanyAlias",
     "Position",
+    "PositionAlias",
     "Post",
     "PostCompanyPosition",
     "Question",

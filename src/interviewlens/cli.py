@@ -13,7 +13,7 @@ from sqlalchemy import text, update as sa_update
 from sqlmodel import select
 
 from .config import PROJECT_ROOT, settings
-from .db import AliasDict, Company, Position, Post, Summary, session_scope
+from .db import Company, CompanyAlias, Position, PositionAlias, Post, Summary, session_scope
 from .logging import log
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="InterviewLens CLI")
@@ -97,7 +97,7 @@ def doctor() -> None:
 # ----------------------------------------------------------- seed-aliases
 @app.command(name="seed-aliases")
 def seed_aliases() -> None:
-    """Load data/seed_aliases.yaml into companies/positions/alias_dict."""
+    """Load data/seed_aliases.yaml into canonical and alias tables."""
     import yaml
 
     yaml_path = PROJECT_ROOT / "data" / "seed_aliases.yaml"
@@ -112,6 +112,8 @@ def seed_aliases() -> None:
         async with session_scope() as s:
             for entity_type, entries in seeds.items():
                 Model = Company if entity_type == "company" else Position
+                AliasModel = CompanyAlias if entity_type == "company" else PositionAlias
+                canonical_field = "company_id" if entity_type == "company" else "position_id"
                 for entry in entries:
                     canonical = entry["canonical"]
                     aliases = entry.get("aliases", [])
@@ -128,18 +130,14 @@ def seed_aliases() -> None:
                     for alias in {canonical, *aliases}:
                         already = (
                             await s.execute(
-                                select(AliasDict).where(
-                                    AliasDict.entity_type == entity_type,
-                                    AliasDict.alias == alias,
-                                )
+                                select(AliasModel).where(AliasModel.alias == alias)
                             )
                         ).scalar_one_or_none()
                         if already is None:
                             s.add(
-                                AliasDict(
-                                    entity_type=entity_type,
+                                AliasModel(
                                     alias=alias,
-                                    canonical_id=existing.id,
+                                    **{canonical_field: existing.id},
                                     confidence=1.0,
                                 )
                             )
@@ -175,10 +173,12 @@ def reset(
         async with session_scope() as s:
             await s.execute(text("DELETE FROM questions"))
             await s.execute(text("DELETE FROM summaries"))
-            await s.execute(text("DELETE FROM alias_dict"))
+            await s.execute(text("DELETE FROM company_aliases"))
+            await s.execute(text("DELETE FROM position_aliases"))
             await s.execute(text("ALTER SEQUENCE IF EXISTS questions_id_seq RESTART WITH 1"))
             await s.execute(text("ALTER SEQUENCE IF EXISTS summaries_id_seq RESTART WITH 1"))
-            await s.execute(text("ALTER SEQUENCE IF EXISTS alias_dict_id_seq RESTART WITH 1"))
+            await s.execute(text("ALTER SEQUENCE IF EXISTS company_aliases_id_seq RESTART WITH 1"))
+            await s.execute(text("ALTER SEQUENCE IF EXISTS position_aliases_id_seq RESTART WITH 1"))
 
             if full:
                 await s.execute(text("DELETE FROM post_company_position"))
@@ -586,27 +586,28 @@ def aliases(
     entity_type: str = typer.Option("company", "--type", help='"company" or "position"'),
     limit: int = typer.Option(50),
 ) -> None:
-    """List alias_dict entries for sanity-checking the dictionary."""
+    """List entity-specific alias entries for sanity-checking the dictionary."""
 
     async def _run() -> None:
+        AliasModel = CompanyAlias if entity_type == "company" else PositionAlias
+        canonical_field = "company_id" if entity_type == "company" else "position_id"
         async with session_scope() as s:
             rows = (
                 await s.execute(
-                    select(AliasDict)
-                    .where(AliasDict.entity_type == entity_type)
-                    .order_by(AliasDict.canonical_id, AliasDict.alias)
+                    select(AliasModel)
+                    .order_by(getattr(AliasModel, canonical_field), AliasModel.alias)
                     .limit(limit)
                 )
             ).scalars().all()
         if not rows:
             console.print(f"[yellow]no aliases for {entity_type}[/yellow]")
             return
-        table = Table(title=f"alias_dict · {entity_type} · {len(rows)} rows")
+        table = Table(title=f"{AliasModel.__tablename__} · {len(rows)} rows")
         table.add_column("alias", style="cyan")
         table.add_column("canonical_id")
         table.add_column("conf")
         for r in rows:
-            table.add_row(r.alias, str(r.canonical_id), f"{r.confidence:.2f}")
+            table.add_row(r.alias, str(getattr(r, canonical_field)), f"{r.confidence:.2f}")
         console.print(table)
 
     asyncio.run(_run())
@@ -792,6 +793,35 @@ def backfill_embeddings_cmd(
     async def _run() -> None:
         stats = await backfill_embeddings(batch_size=batch_size, limit=limit, force=force)
         meta = Table(title="backfill embeddings", show_header=False)
+        meta.add_column("k", style="cyan")
+        meta.add_column("v")
+        meta.add_row("scanned", str(stats.scanned))
+        meta.add_row("embedded", str(stats.embedded))
+        meta.add_row("skipped", str(stats.skipped))
+        console.print(meta)
+
+    asyncio.run(_run())
+
+
+# --------------------------------------------------- backfill-canonical-embeddings
+@app.command(name="backfill-canonical-embeddings")
+def backfill_canonical_embeddings_cmd(
+    entity_type: str = typer.Option("all", "--type", help='"company", "position", or "all"'),
+    batch_size: int = typer.Option(64),
+    limit: int | None = typer.Option(None, help="Process at most N rows"),
+    force: bool = typer.Option(False, "--force", help="Re-embed rows that already have embedding"),
+) -> None:
+    """Encode canonical company/position names for pgvector normalisation."""
+    from .embedding import backfill_canonical_embeddings
+
+    async def _run() -> None:
+        stats = await backfill_canonical_embeddings(
+            entity_type=None if entity_type == "all" else entity_type,
+            batch_size=batch_size,
+            limit=limit,
+            force=force,
+        )
+        meta = Table(title="backfill canonical embeddings", show_header=False)
         meta.add_column("k", style="cyan")
         meta.add_column("v")
         meta.add_row("scanned", str(stats.scanned))

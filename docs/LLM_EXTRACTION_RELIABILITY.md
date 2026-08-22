@@ -1,5 +1,7 @@
 # LLM Extraction Reliability
 
+> 本文前面的案例记录历史故障；Aggregator 的当前实现状态见文末“Current implementation status”。
+
 ## Issues encountered
 
 ### 1. Enum mismatch — DeepSeek returns values not in schema
@@ -127,10 +129,20 @@ Chain of two failures in the aggregator pipeline:
 
 ### Lessons
 
-- `response_format="json_object"` with `json-repair` is sufficient; never store raw LLM
-  output without deterministic post-processing.
+- `response_format="json_object"` with `json-repair` is not a complete business contract;
+  it must be followed by schema validation and, where applicable, source-fact checks.
+- Never store raw LLM output without deterministic post-processing.
 - Renderer must be defensive against LLM type variance (array vs object, null fields).
 - Database query for corrupt rows + targeted re-generation is better than a full rebuild.
+
+### Current implementation status
+
+The historical free-form fallback described above is no longer used. The current
+Aggregator keeps JSON mode on every content attempt, validates the response with
+`llm/aggregator_schema.py:AggregatorResult`, and verifies that quoted questions came
+from the input bucket. Empty, malformed, or semantically invalid output receives one
+corrective retry; API/network failures use a separate bounded transport retry. A
+response that still fails validation is not written to `summaries`.
 
 ## Files changed
 

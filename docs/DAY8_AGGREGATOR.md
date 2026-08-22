@@ -60,6 +60,8 @@ posts.questions
 - 4 章节模板：高频考点 Top10 / 重点考察方向 / 易忽略偏门题 / 备考建议
 - 铁律：每条考点必须引用原题；不臆造；备考建议要具体到技术点
 
+**输出可靠性**：Aggregator 使用 `response_format=json_object`，但不把 JSON mode 当作业务 schema。响应先经 `json.loads`，失败时尝试 `json-repair`，再由 `llm/aggregator_schema.py` 的 `AggregatorResult` 做 Pydantic 校验；题目引用还要能在当前输入 bucket 中找到。空输出、解析失败或校验失败时最多追加一次纠正提示，网络/API 异常由独立的指数退避处理。两次内容尝试都失败时不写入未经校验的摘要，批量任务跳过当前 bucket。
+
 ## 4. 单桶 vs 全桶
 
 ```bash

@@ -101,7 +101,7 @@
 
 ## 2. Normalizer Prompt（v1）
 
-**用途**：当 alias_dict 未命中、且 embedding 相似度 < 0.85 时，让 LLM 判断是否是已有 canonical 的别名，或新建 canonical。
+**用途**：当对应实体别名表未命中、且 pgvector canonical 相似度 < 0.85 时，让 LLM 判断是否是已有 canonical 的别名，或新建 canonical。
 
 ```
 判断"{alias}"在面经语境下指代的实体。
@@ -140,7 +140,7 @@
 题目列表（含出现频次）：
 {questions_with_freq}
 
-输出 markdown，包含：
+输出 JSON，包含以下字段；Markdown 由 `render_aggregator_md()` 在代码端生成：
 
 ## 高频考点 Top 10
 （按频次排序，每条引用 1-2 道原题作为示例，原题用 > 引用块）
@@ -159,6 +159,8 @@
 2. 不要编造题目；引用原题必须来自给定列表。
 3. 备考建议要具体到技术点，不要"多刷算法"这种废话。
 ```
+
+当前实现补充约束：`AggregatorResult`（`llm/aggregator_schema.py`）会校验字段、类型、非空内容和未知字段；引用的题目必须来自当前输入列表。JSON 语法错误先尝试 `json-repair`，空/非法输出最多追加一次纠正提示；API/网络错误走独立的指数退避重试。失败结果不会写入 `summaries`。
 
 ---
 

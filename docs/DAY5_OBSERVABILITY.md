@@ -111,4 +111,4 @@ diff before.txt after.txt
 
 ## 8. 下一步（D6 预告）
 
-D6 加 Normalizer 节点：公司/岗位归一化（alias_dict 直查 → bge-m3 embedding 相似度 → LLM 兜底自学习）。
+D6 加 Normalizer 节点：公司/岗位归一化（实体别名表直查 → pgvector canonical embedding → LLM 兜底自学习）。

@@ -23,14 +23,14 @@ async def test_logic_bug_bubbles_out_of_resolve(monkeypatch: pytest.MonkeyPatch)
     async def _no_alias(entity_type, alias):
         return None
 
-    async def _no_canonicals(entity_type):
+    async def _no_canonicals(entity_type, alias):
         return []
 
     def _boom(**kwargs):
         raise TypeError("simulated logic bug — e.g. wrong kwarg shape")
 
-    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
-    monkeypatch.setattr(res, "_list_canonicals", _no_canonicals)
+    monkeypatch.setattr(res, "_lookup_alias", _no_alias)
+    monkeypatch.setattr(res, "_search_canonicals", _no_canonicals)
     monkeypatch.setattr(res, "call_tool", _boom)
 
     with pytest.raises(TypeError, match="simulated logic bug"):
@@ -43,7 +43,7 @@ async def test_llm_failure_degrades_to_new_canonical(monkeypatch: pytest.MonkeyP
     async def _no_alias(entity_type, alias):
         return None
 
-    async def _no_canonicals(entity_type):
+    async def _no_canonicals(entity_type, alias):
         return []
 
     def _api_error(**kwargs):
@@ -55,8 +55,8 @@ async def test_llm_failure_degrades_to_new_canonical(monkeypatch: pytest.MonkeyP
         created.append(name)
         return res.ResolveResult(canonical_id=42, confidence=0.5, source="new")
 
-    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
-    monkeypatch.setattr(res, "_list_canonicals", _no_canonicals)
+    monkeypatch.setattr(res, "_lookup_alias", _no_alias)
+    monkeypatch.setattr(res, "_search_canonicals", _no_canonicals)
     monkeypatch.setattr(res, "call_tool", _api_error)
     monkeypatch.setattr(res, "_persist_new_canonical", _persist_new)
 
@@ -72,7 +72,7 @@ async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytes
     async def _no_alias(entity_type, alias):
         return None
 
-    async def _no_canonicals(entity_type):
+    async def _no_canonicals(entity_type, alias):
         return []
 
     async def _wrong_id(entity_type, canonical_id):
@@ -86,8 +86,8 @@ async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytes
             arguments={"decision": "match", "canonical_id": 99, "confidence": 0.95}
         )
 
-    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
-    monkeypatch.setattr(res, "_list_canonicals", _no_canonicals)
+    monkeypatch.setattr(res, "_lookup_alias", _no_alias)
+    monkeypatch.setattr(res, "_search_canonicals", _no_canonicals)
     monkeypatch.setattr(res, "_canonical_exists", _wrong_id)
     monkeypatch.setattr(res, "call_tool", _tool)
     monkeypatch.setattr(res, "_persist_new_canonical", _persist_new)
@@ -103,26 +103,16 @@ async def test_alias_conflict_returns_database_winner(monkeypatch: pytest.Monkey
     async def _no_alias(entity_type, alias):
         return None
 
-    async def _canonicals(entity_type):
-        return [(1, "字节跳动")]
-
-    async def _embedding(texts):
-        return None
-
-    def _similarity(query, gallery):
-        import numpy as np
-
-        return np.asarray([[0.95]], dtype=np.float32)
+    async def _top_canonical(entity_type, alias):
+        return [{"id": 1, "canonical": "字节跳动", "similarity": 0.95}]
 
     async def _write_alias(entity_type, alias, canonical_id, confidence):
         return 2, 0.91, False
 
-    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
-    monkeypatch.setattr(res, "_list_canonicals", _canonicals)
-    monkeypatch.setattr(res, "embed_texts", _embedding)
-    monkeypatch.setattr(res, "cosine_matrix", _similarity)
+    monkeypatch.setattr(res, "_lookup_alias", _no_alias)
+    monkeypatch.setattr(res, "_search_canonicals", _top_canonical)
     monkeypatch.setattr(res, "_write_alias", _write_alias)
 
     result = await res.resolve_entity("company", "字节")
 
-    assert result == res.ResolveResult(canonical_id=2, confidence=0.91, source="alias_dict")
+    assert result == res.ResolveResult(canonical_id=2, confidence=0.91, source="alias")

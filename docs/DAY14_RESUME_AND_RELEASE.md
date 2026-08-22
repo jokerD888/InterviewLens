@@ -128,7 +128,7 @@ cd web && pnpm install && pnpm dev   # 启前端
 ### Added
 - LangGraph 6-node Agent pipeline（Crawler→Cleaner→Extractor→Normalizer→Scorer→Aggregator）
 - DeepSeek-V4 Function Calling 结构化抽取 + Redis 缓存（key 含 prompt 版本）
-- 三级实体归一化（alias_dict / bge-m3 embedding / DeepSeek 兜底）+ 自学习字典
+- 三级实体归一化（实体别名表 / pgvector canonical embedding / DeepSeek 兜底）+ 自学习字典
 - 内容评分与动态时效排序（题量 / 答案 / 轮次 + 发布时间）
 - pgvector HNSW 余弦检索 + 余弦聚类去重
 - Celery + Redis 批量 + 死信队列 + Playwright 列表页发现
@@ -231,7 +231,7 @@ api.yourdomain.com {
 > 全栈实现端到端 AI 流水线：抓取 → LLM 抽取 → 实体归一 → 质量打分 → 向量检索 → 摘要生成。
 >
 > - Python LangGraph 6 节点 Agent + Celery 批量；DB 状态字段实现可断点续跑
-> - 三级实体归一（alias_dict→bge-m3→DeepSeek 兜底）+ 自学习字典，准确率 >95%
+> - 三级实体归一（实体别名表→pgvector canonical embedding→DeepSeek 兜底）+ 自学习字典；准确率需用标注集实测，不预设 >95% 结论
 > - pgvector HNSW 检索 P50 < 5ms（百题）/<50ms（万题）；余弦聚类去重避免摘要重复
 > - 节点级 Langfuse trace + Redis 缓存命中率 + token 成本仪表，单条流水线 < ¥0.01
 > - FastAPI REST + Next.js 15 RSC + URL 状态化前端，三栏浏览/语义搜索/任务面板

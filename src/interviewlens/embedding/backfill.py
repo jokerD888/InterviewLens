@@ -1,4 +1,4 @@
-"""Backfill embeddings for questions table.
+"""Backfill embeddings for questions and canonical entity tables.
 
 Each question's content is encoded with bge-m3 and written to
 ``questions.embedding``. Idempotent: rows with non-null embedding are skipped
@@ -11,13 +11,20 @@ from dataclasses import dataclass
 from sqlalchemy import update
 from sqlmodel import select
 
-from ..db import Question, session_scope
-from .bge_m3 import embed_texts
+from ..db import Company, Position, Question, session_scope
 from ..logging import log
+from .bge_m3 import embed_texts
 
 
 @dataclass(slots=True)
 class BackfillStats:
+    scanned: int = 0
+    embedded: int = 0
+    skipped: int = 0
+
+
+@dataclass(slots=True)
+class CanonicalBackfillStats:
     scanned: int = 0
     embedded: int = 0
     skipped: int = 0
@@ -66,5 +73,73 @@ async def backfill_embeddings(
                 )
         stats.embedded += len(chunk)
         log.info("embed.backfill_progress", done=stats.embedded, total=stats.scanned)
+
+    return stats
+
+
+async def backfill_canonical_embeddings(
+    *,
+    entity_type: str | None = None,
+    batch_size: int = 64,
+    limit: int | None = None,
+    force: bool = False,
+) -> CanonicalBackfillStats:
+    """Persist embeddings for companies and/or positions.
+
+    Existing canonical rows are intentionally backfilled separately from
+    question embeddings: canonical vectors are consumed by the normalizer's
+    pgvector nearest-neighbour query and must be available before tier 2 can
+    match aliases. New canonical rows are embedded during creation; this
+    command repairs old or temporarily failed rows.
+    """
+    if entity_type not in (None, "company", "position"):
+        raise ValueError("entity_type must be 'company', 'position', or None")
+
+    models = (
+        [(entity_type, Company if entity_type == "company" else Position)]
+        if entity_type is not None
+        else [("company", Company), ("position", Position)]
+    )
+    stats = CanonicalBackfillStats()
+
+    for current_type, Model in models:
+        async with session_scope() as session:
+            stmt = select(Model)
+            if not force:
+                stmt = stmt.where(Model.embedding.is_(None))  # type: ignore[union-attr]
+            stmt = stmt.order_by(Model.id)
+            if limit is not None:
+                remaining = max(limit - stats.scanned, 0)
+                stmt = stmt.limit(remaining)
+            rows = (await session.execute(stmt)).scalars().all()
+
+        stats.scanned += len(rows)
+        if not rows:
+            continue
+
+        log.info(
+            "embed.canonical_backfill_start",
+            entity_type=current_type,
+            n=len(rows),
+            batch_size=batch_size,
+        )
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            vecs = await embed_texts([row.canonical for row in chunk])
+
+            async with session_scope() as session:
+                for row, vector in zip(chunk, vecs, strict=True):
+                    await session.execute(
+                        update(Model)
+                        .where(Model.id == row.id)
+                        .values(embedding=vector.tolist())
+                    )
+            stats.embedded += len(chunk)
+            log.info(
+                "embed.canonical_backfill_progress",
+                entity_type=current_type,
+                done=stats.embedded,
+                total=stats.scanned,
+            )
 
     return stats

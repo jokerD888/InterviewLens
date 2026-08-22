@@ -1,4 +1,4 @@
-"""SQLModel ORM definitions, mirrored against sql/001_init.sql."""
+"""SQLModel ORM definitions, mirrored against the SQL migrations."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -19,6 +19,10 @@ class Company(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     canonical: str = Field(unique=True, index=True)
     industry: str | None = None
+    embedding: Any | None = Field(
+        default=None,
+        sa_column=Column(Vector(1024), nullable=True),
+    )
     created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
@@ -29,6 +33,10 @@ class Position(SQLModel, table=True):
     canonical: str = Field(unique=True, index=True)
     category: str | None = None
     level: str | None = None
+    embedding: Any | None = Field(
+        default=None,
+        sa_column=Column(Vector(1024), nullable=True),
+    )
     created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
@@ -96,15 +104,29 @@ class Summary(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
-class AliasDict(SQLModel, table=True):
-    __tablename__ = "alias_dict"
+class CompanyAlias(SQLModel, table=True):
+    __tablename__ = "company_aliases"
     __table_args__ = (
-        Index("ux_alias_lookup", "entity_type", "alias", unique=True),
+        Index("ux_company_alias_lookup", "alias", unique=True),
+        Index("idx_company_alias_canonical", "company_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
-    entity_type: str  # 'company' | 'position'
+    company_id: int = Field(foreign_key="companies.id")
     alias: str
-    canonical_id: int
+    confidence: float = 1.0
+    learned_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
+
+
+class PositionAlias(SQLModel, table=True):
+    __tablename__ = "position_aliases"
+    __table_args__ = (
+        Index("ux_position_alias_lookup", "alias", unique=True),
+        Index("idx_position_alias_canonical", "position_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    position_id: int = Field(foreign_key="positions.id")
+    alias: str
     confidence: float = 1.0
     learned_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})

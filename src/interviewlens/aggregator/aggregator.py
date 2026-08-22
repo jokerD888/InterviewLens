@@ -10,9 +10,16 @@ from datetime import datetime, timezone
 
 import numpy as np
 import openai
+from pydantic import ValidationError
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from ..config import settings
 from ..db import (
@@ -25,7 +32,8 @@ from ..db import (
 )
 from ..embedding import cosine_matrix, embed_texts
 from ..errors import swallow
-from ..llm.deepseek import call_tool, get_client
+from ..llm.aggregator_schema import AggregatorResult
+from ..llm.deepseek import get_client
 from ..llm.prompts import (
     build_aggregator_messages,
     render_aggregator_md,
@@ -39,6 +47,12 @@ MIN_CONTENT_SCORE = 30
 # Backward-compatible import/name for CLI callers; the threshold is now
 # explicitly a stable content-completeness threshold.
 MIN_QUALITY_SCORE = MIN_CONTENT_SCORE
+MAX_OUTPUT_ATTEMPTS = 2  # initial generation + one corrective prompt
+MAX_TRANSPORT_ATTEMPTS = 3
+
+
+class AggregatorOutputError(RuntimeError):
+    """The model response could not be parsed or failed business validation."""
 
 
 @dataclass(slots=True)
@@ -195,6 +209,112 @@ def _cluster_questions(
     return clusters
 
 
+def _normalise_question_text(value: str) -> str:
+    """Normalise only whitespace for source-question membership checks."""
+    return " ".join(value.split())
+
+
+def _parse_aggregator_output(
+    raw_content: str,
+    *,
+    questions: list[dict],
+) -> AggregatorResult:
+    """Parse, validate, and fact-check one Aggregator response.
+
+    ``json-repair`` is intentionally only a syntax-recovery step.  The
+    Pydantic model remains the runtime contract, and question references are
+    checked against the exact input bucket (apart from whitespace).
+    """
+    if not raw_content.strip():
+        raise AggregatorOutputError("Aggregator returned empty content")
+
+    try:
+        data = json.loads(raw_content)
+    except json.JSONDecodeError as first_error:
+        try:
+            from json_repair import repair_json
+
+            data = json.loads(repair_json(raw_content))
+        except Exception as repair_error:  # noqa: BLE001 - parser boundary
+            raise AggregatorOutputError(
+                f"Invalid JSON after repair: {repair_error}"
+            ) from first_error
+
+    if not isinstance(data, dict):
+        raise AggregatorOutputError("Aggregator JSON top level must be an object")
+
+    try:
+        result = AggregatorResult.model_validate(data)
+    except ValidationError as exc:
+        raise AggregatorOutputError(
+            f"Aggregator schema validation failed: {str(exc)[:1200]}"
+        ) from exc
+
+    known_questions = {
+        _normalise_question_text(str(q.get("content", ""))) for q in questions
+    }
+    referenced_questions = [
+        *(
+            question
+            for topic in result.high_frequency_topics
+            for question in topic.sample_questions
+        ),
+        *(
+            question
+            for edge in result.edge_cases
+            for question in edge.questions
+        ),
+    ]
+    unknown_questions = [
+        question
+        for question in referenced_questions
+        if _normalise_question_text(question) not in known_questions
+    ]
+    if unknown_questions:
+        preview = "; ".join(unknown_questions[:2])[:500]
+        raise AggregatorOutputError(
+            f"Aggregator referenced question(s) not present in input: {preview}"
+        )
+
+    return result
+
+
+def _merge_usage(total: dict | None, current: dict | None) -> dict | None:
+    """Add token counters across corrective attempts."""
+    if current is None:
+        return total
+    merged = dict(total or {})
+    for key, value in current.items():
+        if isinstance(value, (int, float)):
+            merged[key] = (merged.get(key) or 0) + value
+        elif key not in merged:
+            merged[key] = value
+    return merged
+
+
+async def _create_aggregator_response(*, client, messages: list[dict], temperature: float):
+    """Call the provider with transport-only retries.
+
+    Output validation is handled by ``_summarise`` because invalid output
+    needs a corrective prompt, not a blind transport retry.
+    """
+    async for attempt in AsyncRetrying(
+        stop=stop_after_attempt(MAX_TRANSPORT_ATTEMPTS),
+        wait=wait_exponential(min=1, max=8),
+        retry=retry_if_exception_type((openai.APIError, asyncio.TimeoutError)),
+        reraise=True,
+    ):
+        with attempt:
+            return await client.chat.completions.create(
+                model=settings.deepseek_model_chat,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+                max_tokens=8192,
+                response_format={"type": "json_object"},  # type: ignore[arg-type]
+            )
+    raise RuntimeError("unreachable")
+
+
 async def _summarise(
     *,
     company: str,
@@ -203,40 +323,69 @@ async def _summarise(
     questions: list[dict],
     trace=None,
 ) -> tuple[str, dict | None]:
-    """Generate structured JSON via DeepSeek, then render to consistent markdown.
+    """Generate validated structured JSON via DeepSeek, then render Markdown.
 
-    If JSON mode produces empty output, retries once without response_format
-    (free-form markdown fallback).
+    A second attempt is made only for an empty, malformed, or semantically
+    invalid model response.  The retry keeps JSON mode and adds a corrective
+    prompt; raw model output is never persisted.
     """
-    messages = build_aggregator_messages(
+    base_messages = build_aggregator_messages(
         company=company, position=position, period=period, questions=questions
     )
     client = get_client()
     usage_total: dict | None = None
 
-    # ---- Attempt 1: JSON mode ----
-    resp = await client.chat.completions.create(
-        model=settings.deepseek_model_chat,
-        messages=messages,  # type: ignore[arg-type]
-        temperature=0.3,
-        max_tokens=8192,
-        response_format={"type": "json_object"},  # type: ignore[arg-type]
-    )
-    raw_content = resp.choices[0].message.content or ""
-    usage_total = resp.usage.model_dump() if resp.usage else None
-
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError:
-        from json_repair import repair_json
-        data = json.loads(repair_json(raw_content))
-    content_md = render_aggregator_md(data) if isinstance(data, dict) else str(data)
-
-    if usage_total:
-        await incr_tokens(
-            prompt=int(usage_total.get("prompt_tokens") or 0),
-            completion=int(usage_total.get("completion_tokens") or 0),
+    messages = base_messages
+    result: AggregatorResult | None = None
+    last_error: AggregatorOutputError | None = None
+    for attempt_no in range(1, MAX_OUTPUT_ATTEMPTS + 1):
+        resp = await _create_aggregator_response(
+            client=client,
+            messages=messages,
+            temperature=0.3 if attempt_no == 1 else 0.0,
         )
+        current_usage = resp.usage.model_dump() if resp.usage else None
+        usage_total = _merge_usage(usage_total, current_usage)
+        if current_usage:
+            await incr_tokens(
+                prompt=int(current_usage.get("prompt_tokens") or 0),
+                completion=int(current_usage.get("completion_tokens") or 0),
+            )
+        raw_content = resp.choices[0].message.content or ""
+
+        try:
+            result = _parse_aggregator_output(raw_content, questions=questions)
+            break
+        except AggregatorOutputError as exc:
+            last_error = exc
+            if attempt_no == MAX_OUTPUT_ATTEMPTS:
+                raise
+            log.warning(
+                "aggregate.output_retry",
+                attempt=attempt_no,
+                error=str(exc),
+                company=company,
+                position=position,
+                period=period,
+            )
+            messages = [
+                *base_messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "上一次输出未通过校验："
+                        f"{str(exc)[:1000]}\n"
+                        "请重新生成，只返回符合要求的 JSON；不要解释，不要返回 Markdown，"
+                        "题目引用必须逐字来自输入列表。"
+                    ),
+                },
+            ]
+
+    if result is None:
+        raise last_error or AggregatorOutputError("Aggregator returned no result")
+
+    content_md = render_aggregator_md(result.model_dump())
+
     if trace is not None:
         with swallow("aggregate.trace_record_failed"):  # Layer A
             trace.generation(

@@ -50,6 +50,8 @@ docker compose exec api uv run il batch --pages 3 --inline
 
 ```bash
 docker compose exec api uv run il backfill-embeddings
+# canonical 公司/岗位名称向量（Normalizer 的 pgvector 候选检索）
+docker compose exec api uv run il backfill-canonical-embeddings
 docker compose exec api uv run il aggregate
 ```
 
@@ -177,7 +179,8 @@ docker compose exec api uv run il show-summary 字节跳动 后端开发 --perio
 | **软重置** | `docker compose exec api uv run il reset` | 保留已爬帖子，清空 AI 结果（questions/summaries/aliases），post 回 pending |
 | **硬重置** | `docker compose exec api uv run il reset --full` | 帖子也全删，彻底重来 |
 | 跳过确认 | `docker compose exec api uv run il reset -y` | 加 `-y` 跳过确认提示 |
-| 重跑 embedding + 聚合 | `docker compose exec api uv run il backfill-embeddings && docker compose exec api uv run il aggregate` | 调 prompt 后刷新结果 |
+| 重跑题目 embedding + 聚合 | `docker compose exec api uv run il backfill-embeddings && docker compose exec api uv run il aggregate` | 调 prompt 后刷新题目结果 |
+| 回填 canonical embedding | `docker compose exec api uv run il backfill-canonical-embeddings` | 迁移后或新增失败行后修复公司/岗位向量 |
 | 查看别名 | `docker compose exec api uv run il aliases` | |
 | 归一化测试 | `docker compose exec api uv run il normalize "字节" --type company` | |
 
@@ -273,6 +276,7 @@ docker compose exec api uv run il aggregate
 │  il aliases            查看别名词典                               │
 │                                                                  │
 │  il backfill-embeddings   bge-m3 向量化                           │
+│  il backfill-canonical-embeddings  公司/岗位 canonical 向量        │
 │  il aggregate             RAG 摘要生成                            │
 │  il show-summary <c> <p>  查看摘要                                │
 │                                                                  │

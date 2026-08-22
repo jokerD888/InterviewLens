@@ -118,86 +118,13 @@ AGGREGATOR_SYSTEM = """你是面试备考助手。基于用户给出的真实面
 你必须输出一个 JSON 对象，严格遵守下方 schema。不要输出任何 JSON 之外的文字。
 
 铁律：
-1. high_frequency_topics 至少 3 条，每条 sample_questions 至少 1 道原题（必须来自给定列表）。
-2. focus_areas 至少 3 条，要具体到技术点（如「BTree vs LSM 比较」「ZSet 内部结构」），不要空话。
-3. edge_cases 至少 1 条（没有偏门题也要挑一道相对冷门的填入）。
-4. prep_advice 至少 3 条，针对该公司该岗位，不要通用空话。
+1. 输入题目足够时，high_frequency_topics 尽量给出至少 3 条；每条 sample_questions 至少 1 道原题（必须来自给定列表）。
+2. 输入题目足够时，focus_areas 尽量给出 3 条；要具体到技术点（如「BTree vs LSM 比较」「ZSet 内部结构」），不要空话。
+3. edge_cases 至少 1 条；如果输入题目很少，只使用真实题目，不要为了凑数量编造。
+4. prep_advice 尽量给出 3 条，针对该公司该岗位，不要通用空话。
 5. 不要编造题目；sample_questions 必须来自给定列表。
 6. 只输出 JSON，不要加 markdown 代码围栏，不要加任何解释性文字。
 7. 【最重要】禁止输出空数组 [] 或空字符串，每个字段都必须有内容。"""
-
-
-# JSON schema for aggregator output — structured data, rendered to markdown in code.
-# This guarantees 100% format consistency across all LLM calls.
-AGGREGATOR_JSON_SCHEMA: dict = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "interview_summary",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "required": [
-                "high_frequency_topics",
-                "focus_areas",
-                "edge_cases",
-                "prep_advice",
-            ],
-            "properties": {
-                "high_frequency_topics": {
-                    "type": "array",
-                    "description": "高频考点 Top 10，按频次降序。最多 10 条。",
-                    "items": {
-                        "type": "object",
-                        "required": ["topic", "frequency", "sample_questions"],
-                        "properties": {
-                            "topic": {
-                                "type": "string",
-                                "description": "考点名称，如「大模型微调实践」",
-                            },
-                            "frequency": {
-                                "type": "integer",
-                                "description": "出现频次",
-                            },
-                            "sample_questions": {
-                                "type": "array",
-                                "description": "1-2 道原题原文，必须来自题目列表",
-                                "items": {"type": "string"},
-                            },
-                        },
-                        "additionalProperties": False,
-                    },
-                },
-                "focus_areas": {
-                    "type": "array",
-                    "description": "重点考察方向，3-5 个分类总结",
-                    "items": {"type": "string"},
-                },
-                "edge_cases": {
-                    "type": "array",
-                    "description": "易忽略的偏门题（频次 1-2 但有特点）",
-                    "items": {
-                        "type": "object",
-                        "required": ["topic", "questions"],
-                        "properties": {
-                            "topic": {"type": "string"},
-                            "questions": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                        },
-                        "additionalProperties": False,
-                    },
-                },
-                "prep_advice": {
-                    "type": "array",
-                    "description": "针对该公司该岗位的备考建议，3-5 条",
-                    "items": {"type": "string"},
-                },
-            },
-            "additionalProperties": False,
-        },
-    },
-}
 
 
 def render_aggregator_md(data: dict) -> str:
@@ -282,9 +209,9 @@ def build_aggregator_messages(
         f"题目列表（按频次排序）：\n{questions_block}\n\n"
         "请输出 JSON，字段说明：\n"
         "- high_frequency_topics: 高频考点 Top 10，按频次降序\n"
-        "- focus_areas: 重点考察方向，3-5 个字符串\n"
+        "- focus_areas: 重点考察方向，尽量 3-5 个字符串（输入不足时按实际题目）\n"
         "- edge_cases: 偏门题，每个含 topic + questions 数组\n"
-        "- prep_advice: 针对性备考建议，3-5 条字符串\n\n"
+        "- prep_advice: 针对性备考建议，尽量 3-5 条字符串\n\n"
         "只输出 JSON，不要任何其他内容。"
     )
     return [

@@ -42,7 +42,7 @@
 ### Day 6 —— Normalizer
 - [ ] `embedding/bge_m3.py`：sentence-transformers 加载（fp16 节省内存）
 - [ ] 手写 `data/seed_aliases.yaml` 种子词典（30+ 大厂别名）
-- [ ] `agent/nodes/normalizer.py`：alias_dict 直查 → embedding 相似度 → LLM 兜底
+- [ ] `agent/nodes/normalizer.py`：实体别名表直查 → pgvector canonical Top-K → LLM 兜底
 - **验收**："字节"、"Bytedance"、"抖音"全部归一到同一 company_id
 
 ### Day 7 —— Scorer
@@ -52,6 +52,8 @@
 
 ### Day 8 —— Aggregator
 - [ ] `agent/nodes/aggregator.py`：分桶 + pgvector top-100 召回 + DeepSeek 总结
+- [x] `llm/aggregator_schema.py`：Pydantic 校验摘要结构，并校验题目引用来自输入
+- [x] 空/非法输出纠正重试；API/网络异常指数退避；失败不写入坏摘要
 - [ ] 写入 `summaries` 表
 - [ ] CLI：`python -m interviewlens.aggregate --company 字节跳动 --position 后端开发 --period 2025Q2`
 - **验收**：输出 markdown 包含高频考点 + 引用原题

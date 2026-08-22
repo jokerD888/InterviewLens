@@ -1,24 +1,24 @@
-"""Three-tier entity normalisation: alias_dict → embedding → LLM.
+"""Entity normalisation: alias table → pgvector → LLM.
 
 API: ``resolve_entity(entity_type, alias) -> (canonical_id, confidence, source)``
 
-source is one of: "alias_dict" | "embedding" | "llm" | "new".
-The function self-learns at the data layer: embedding/LLM matches and tier-4
-new canonicals write an alias mapping back to ``alias_dict`` so later calls can
-short-circuit. This does not update model parameters.
+source is one of: "alias" | "embedding" | "llm" | "new".
+The function self-learns at the data layer: embedding/LLM matches and new
+canonicals write an alias mapping back to the entity-specific alias table so
+later calls can short-circuit. This does not update model parameters.
 """
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 
-import numpy as np
 import openai
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
-from ..db import AliasDict, Company, Position, session_scope
-from ..embedding import cosine_matrix, embed_texts
+from ..db import Company, CompanyAlias, Position, PositionAlias, session_scope
+from ..embedding import embed_texts
 from ..llm.deepseek import call_tool
 from ..llm.prompts import NORMALIZE_FUNCTION_SCHEMA, build_normalizer_messages
 from ..logging import log
@@ -33,7 +33,7 @@ TOP_K: int = 5
 class ResolveResult:
     canonical_id: int
     confidence: float
-    source: str  # alias_dict | embedding | llm | new
+    source: str  # alias | embedding | llm | new
 
 
 # --------------------------------------------------------------- helpers
@@ -46,24 +46,55 @@ def _model_for(entity_type: str):
     raise ValueError(f"unknown entity_type: {entity_type}")
 
 
-async def _lookup_alias_dict(entity_type: str, alias: str) -> int | None:
+def _alias_spec(entity_type: str):
+    if entity_type == "company":
+        return CompanyAlias, "company_id"
+    if entity_type == "position":
+        return PositionAlias, "position_id"
+    raise ValueError(f"unknown entity_type: {entity_type}")
+
+
+async def _lookup_alias(entity_type: str, alias: str) -> int | None:
+    AliasModel, canonical_field = _alias_spec(entity_type)
     async with session_scope() as session:
         row = (
             await session.execute(
-                select(AliasDict).where(
-                    AliasDict.entity_type == entity_type,
-                    AliasDict.alias == alias,
-                )
+                select(getattr(AliasModel, canonical_field)).where(AliasModel.alias == alias)
             )
         ).scalar_one_or_none()
-    return row.canonical_id if row is not None else None
+    return int(row) if row is not None else None
 
 
-async def _list_canonicals(entity_type: str) -> list[tuple[int, str]]:
-    Model = _model_for(entity_type)
+async def _search_canonicals(entity_type: str, alias: str) -> list[dict[str, float | int | str]]:
+    """Return the nearest canonical rows using the database vector index.
+
+    Canonical embeddings are persisted on ``companies``/``positions``. The
+    old implementation encoded every canonical on every alias miss, which
+    made each lookup O(number of canonicals) in both model work and memory.
+    """
+    if entity_type not in ("company", "position"):
+        raise ValueError(f"unknown entity_type: {entity_type}")
+    table = "companies" if entity_type == "company" else "positions"
+    query_vector = (await embed_texts([alias]))[0].tolist()
+    vec_str = "[" + ",".join(f"{value:.6f}" for value in query_vector) + "]"
+    sql = f"""
+        SELECT id, canonical,
+               1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+        FROM {table}
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> CAST(:vec AS vector)
+        LIMIT :limit
+    """
     async with session_scope() as session:
-        rows = (await session.execute(select(Model.id, Model.canonical))).all()
-    return [(r[0], r[1]) for r in rows]
+        rows = (await session.execute(sa_text(sql), {"vec": vec_str, "limit": TOP_K})).all()
+    return [
+        {
+            "id": int(row[0]),
+            "canonical": row[1],
+            "similarity": max(-1.0, min(1.0, float(row[2]))),
+        }
+        for row in rows
+    ]
 
 
 async def _claim_alias(
@@ -80,15 +111,15 @@ async def _claim_alias(
     third return value tells the caller whether this invocation inserted the
     mapping.
     """
-    stmt = pg_insert(AliasDict).values(
-        entity_type=entity_type,
+    AliasModel, canonical_field = _alias_spec(entity_type)
+    stmt = pg_insert(AliasModel).values(
         alias=alias,
-        canonical_id=canonical_id,
+        **{canonical_field: canonical_id},
         confidence=confidence,
     )
     stmt = (
-        stmt.on_conflict_do_nothing(index_elements=["entity_type", "alias"])
-        .returning(AliasDict.canonical_id, AliasDict.confidence)
+        stmt.on_conflict_do_nothing(index_elements=["alias"])
+        .returning(getattr(AliasModel, canonical_field), AliasModel.confidence)
     )
     row = (await session.execute(stmt)).first()
     if row is not None:
@@ -96,9 +127,8 @@ async def _claim_alias(
 
     existing = (
         await session.execute(
-            select(AliasDict.canonical_id, AliasDict.confidence).where(
-                AliasDict.entity_type == entity_type,
-                AliasDict.alias == alias,
+            select(getattr(AliasModel, canonical_field), AliasModel.confidence).where(
+                AliasModel.alias == alias
             )
         )
     ).one()
@@ -120,6 +150,7 @@ async def _get_or_create_canonical(
     session,
     entity_type: str,
     name: str,
+    embedding: list[float] | None = None,
 ) -> tuple[int, bool]:
     """Atomically get or create a canonical row.
 
@@ -127,9 +158,12 @@ async def _get_or_create_canonical(
     database unique constraint, then the already committed row is read back.
     """
     Model = _model_for(entity_type)
+    values: dict[str, object] = {"canonical": name}
+    if embedding is not None:
+        values["embedding"] = embedding
     stmt = (
         pg_insert(Model)
-        .values(canonical=name)
+        .values(**values)
         .on_conflict_do_nothing(index_elements=["canonical"])
         .returning(Model.id)
     )
@@ -138,9 +172,11 @@ async def _get_or_create_canonical(
         return int(row[0]), True
 
     existing = (
-        await session.execute(select(Model.id).where(Model.canonical == name))
+        await session.execute(select(Model).where(Model.canonical == name))
     ).scalar_one()
-    return int(existing), False
+    if embedding is not None and existing.embedding is None:
+        existing.embedding = embedding
+    return int(existing.id), False
 
 
 async def _canonical_exists(entity_type: str, canonical_id: int) -> bool:
@@ -161,8 +197,17 @@ async def _persist_new_canonical(
     """Create/claim tier-4 data without leaving a losing canonical orphan."""
     confidence = 0.5
     Model = _model_for(entity_type)
+    embedding: list[float] | None = None
+    try:
+        embedding = (await embed_texts([new_name]))[0].tolist()
+    except (ImportError, OSError, RuntimeError):
+        # A model/runtime failure leaves the vector NULL; the backfill command
+        # can repair it without losing the canonical or alias mapping.
+        log.warning("normalize.canonical_embedding_failed", name=new_name, exc_info=True)
     async with session_scope() as session:
-        new_id, created_here = await _get_or_create_canonical(session, entity_type, new_name)
+        new_id, created_here = await _get_or_create_canonical(
+            session, entity_type, new_name, embedding
+        )
         winner_id, winner_confidence, claimed = await _claim_alias(
             session,
             entity_type,
@@ -179,7 +224,7 @@ async def _persist_new_canonical(
             return ResolveResult(
                 canonical_id=winner_id,
                 confidence=winner_confidence,
-                source="alias_dict",
+                source="alias",
             )
 
         if new_name != alias:
@@ -199,8 +244,8 @@ async def resolve_entity(
     """Three-tier resolve. Returns canonical_id and how we got there.
 
     Order:
-      1. alias_dict direct lookup
-      2. embedding similarity vs all canonicals
+      1. entity-specific alias table direct lookup
+      2. pgvector nearest-neighbour search over canonical embeddings
       3. LLM tool call with top-5 candidates
       4. new canonical (LLM said "new" or no candidates)
     """
@@ -209,23 +254,14 @@ async def resolve_entity(
         raise ValueError("alias cannot be empty")
 
     # --- tier 1: dictionary
-    canonical_id = await _lookup_alias_dict(entity_type, alias)
+    canonical_id = await _lookup_alias(entity_type, alias)
     if canonical_id is not None:
         log.info("normalize.tier1_hit", entity_type=entity_type, alias=alias, id=canonical_id)
-        return ResolveResult(canonical_id=canonical_id, confidence=1.0, source="alias_dict")
+        return ResolveResult(canonical_id=canonical_id, confidence=1.0, source="alias")
 
     # --- tier 2: embedding
-    canonicals = await _list_canonicals(entity_type)
-    if canonicals:
-        names = [c[1] for c in canonicals]
-        embeddings = await embed_texts([alias, *names])
-        sims = cosine_matrix(embeddings[:1], embeddings[1:])[0]
-        order = np.argsort(-sims)
-        top_idx = order[:TOP_K]
-        top = [
-            {"id": canonicals[i][0], "canonical": canonicals[i][1], "similarity": float(sims[i])}
-            for i in top_idx
-        ]
+    top = await _search_canonicals(entity_type, alias)
+    if top:
         best = top[0]
         if best["similarity"] >= EMBED_THRESHOLD_HIGH:
             winner_id, winner_confidence, claimed = await _write_alias(
@@ -245,7 +281,7 @@ async def resolve_entity(
             return ResolveResult(
                 canonical_id=winner_id,
                 confidence=winner_confidence,
-                source="embedding" if claimed else "alias_dict",
+                source="embedding" if claimed else "alias",
             )
         # filter out very low-similarity candidates before sending to LLM
         candidates_for_llm = [c for c in top if c["similarity"] >= EMBED_THRESHOLD_LOW]
@@ -303,7 +339,7 @@ async def resolve_entity(
             return ResolveResult(
                 canonical_id=winner_id,
                 confidence=winner_confidence,
-                source="llm" if claimed else "alias_dict",
+                source="llm" if claimed else "alias",
             )
 
     # --- tier 4: create a new canonical

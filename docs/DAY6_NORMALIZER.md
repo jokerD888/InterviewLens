@@ -14,14 +14,14 @@
 ## 1. 三级归一策略详解
 
 ```
-alias 来 → tier 1: alias_dict 直查（O(1) Postgres index）
+alias 来 → tier 1: 对应实体别名表直查（O(1) Postgres index）
               ↓ miss
-          tier 2: bge-m3 embedding 与所有 canonical 算余弦
-              ├─ best ≥ 0.85 → 自动 match，写回字典
+          tier 2: bge-m3 查询 canonical embedding 的 pgvector Top-K
+              ├─ best ≥ 0.85 → 自动 match，写回对应别名表
               └─ best < 0.85 → 进 tier 3
           tier 3: LLM Function Calling（带 top-5 候选）
-              ├─ decision=match & confidence ≥ 0.7 → match，写回字典
-              └─ 否则 → 新建 canonical + 同时写回 alias 字典
+              ├─ decision=match & confidence ≥ 0.7 → match，写回对应别名表
+              └─ 否则 → 新建 canonical + 同时写回对应别名表
 ```
 
 阈值定义在 `normalizer/resolver.py`：
@@ -44,6 +44,10 @@ HF_ENDPOINT=https://hf-mirror.com
 ## 3. 单点测试归一化
 
 ```bash
+# 新 schema 首次使用时，先确保 canonical embedding 已回填
+uv run il seed-aliases
+uv run il backfill-canonical-embeddings
+
 # 应该走 tier 1 直查（D1 的种子里已经有「字节」→「字节跳动」）
 uv run il normalize "字节"
 
@@ -57,7 +61,7 @@ uv run il normalize "今日头条母公司"
 uv run il normalize "Java 服务端开发" --type position
 ```
 
-输出包含 `source` 字段（alias_dict / embedding / llm / new），让你直观看走的哪一路。
+输出包含 `source` 字段（alias / embedding / llm / new），让你直观看走的哪一路。
 
 ## 4. 看字典
 
@@ -66,7 +70,7 @@ uv run il aliases --type company --limit 100
 uv run il aliases --type position
 ```
 
-第二次跑同一别名应当 source=alias_dict，证明自学习生效。
+第二次跑同一别名应当 source=alias，证明自学习生效。
 
 ## 5. SQL 验证
 
@@ -80,33 +84,40 @@ JOIN positions p ON p.id = pcp.position_id
 ORDER BY po.id DESC
 LIMIT 20;
 
--- 字典增长情况
-SELECT entity_type, COUNT(*) FROM alias_dict GROUP BY entity_type;
+-- 两张别名表的增长情况
+SELECT 'company' AS entity_type, COUNT(*) FROM company_aliases
+UNION ALL
+SELECT 'position', COUNT(*) FROM position_aliases;
 
 -- 看 LLM 学到了哪些别名（confidence < 1.0 是 LLM 判定的）
-SELECT entity_type, alias, canonical_id, confidence
-FROM alias_dict
+SELECT alias, company_id AS canonical_id, confidence
+FROM company_aliases
 WHERE confidence < 1.0
-ORDER BY learned_at DESC LIMIT 20;
+UNION ALL
+SELECT alias, position_id, confidence
+FROM position_aliases
+WHERE confidence < 1.0
+ORDER BY confidence ASC LIMIT 20;
 ```
 
 ## 6. 关键设计要点（面试讲故事）
 
 - **三级渐进，成本逐层升**：字典查询通常比本地 embedding 和 LLM 调用便宜；具体耗时取决于数据库、模型和部署，仓库没有统一 benchmark。命中率高的别名永远走最便宜的路径
 - **embedding 阈值双向**：上界 0.85 自动放行，下界 0.55 过滤太离谱的候选不送 LLM，省 token
-- **自学习写回**：tier 2/3 匹配成功或 tier 4 新建 canonical 后都会写回 `alias_dict`，下次直接走 tier 1。这里复用的是数据层映射，不是模型参数更新
+- **自学习写回**：tier 2/3 匹配成功或 tier 4 新建 canonical 后都会写回对应实体别名表，下次直接走 tier 1。这里复用的是数据层映射，不是模型参数更新
 - **canonical_name 不臆造**：tier 4 新建时，如果 LLM 没给 canonical_name 就用原始 alias 作为新 canonical，避免随便起名污染数据
 - **bge-m3 选型理由**：1024 维匹配 schema；中英混合最强；CPU 可跑（GPU 自动加速）；HuggingFace 直接下
-- **新建 canonical 同时写 alias**：成功抢占原始 alias 后，原始 alias 和 LLM 建议的新 canonical 名都进字典；如果并发时主 alias 已被别人占用，则回读胜者，不扩散本次未采用的 canonical
-- **并发写回以数据库为准**：alias 冲突后回读已保存的 canonical；tier 4 在同一事务中创建并抢占 alias，失败时清理本次新建的孤儿 canonical
+- **新建 canonical 同时写 alias**：成功抢占原始 alias 后，原始 alias 和 LLM 建议的新 canonical 名都进对应别名表；如果并发时主 alias 已被别人占用，则回读胜者，不扩散本次未采用的 canonical
+- **并发写回以数据库为准**：每张别名表的 `UNIQUE(alias)` 冲突后回读已保存的 canonical；tier 4 在同一事务中创建并抢占 alias，失败时清理本次新建的孤儿 canonical
+- **canonical 向量持久化**：迁移后运行 `il backfill-canonical-embeddings`，Normalizer 只编码查询 alias，候选 canonical 由 pgvector HNSW 索引返回；新增 canonical 会在创建时尝试写入 embedding，失败的行可再次回填
 - **LLM ID 先校验**：`canonical_id` 必须存在于当前 entity_type 对应的表，不能只相信模型返回值
 
 ## 7. 验收清单
 
 - [ ] `il graph <url>` 输出 company_ids / position_ids 非空
-- [ ] `il normalize "字节"` source=alias_dict
+- [ ] `il normalize "字节"` source=alias
 - [ ] `il normalize "ByteDance"` source=embedding（首次）
-- [ ] 重复跑 `il normalize "ByteDance"` source=alias_dict（自学习生效）
+- [ ] 重复跑 `il normalize "ByteDance"` source=alias（自学习生效）
 - [ ] `psql ... \dt; SELECT COUNT(*) FROM post_company_position;` > 0
 - [ ] `pytest tests/test_embedding.py -v` 全绿
 
