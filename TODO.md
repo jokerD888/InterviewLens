@@ -174,7 +174,7 @@ celery_app.conf.beat_schedule = {
     "crawl-daily": {
         "task": "il.enqueue_listing",
         "schedule": crontab(hour=4, minute=0),     # 每天凌晨 4 点
-        "kwargs": {"pages": 30, "skip_normalize": False},
+        "kwargs": {"pages": 30},
     },
     "aggregate-daily": {
         "task": "il.aggregate_pair",

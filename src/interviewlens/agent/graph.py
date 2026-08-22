@@ -2,7 +2,7 @@
 
 Routing rules:
 - After cleaner: skip_reason set → END.
-- After extractor: skip_reason set → END; otherwise → normalize (or score when skip_normalize).
+- After extractor: skip_reason set → END; otherwise → normalize.
 - After normalizer: → score.
 - After scorer: → END.
 """
@@ -38,17 +38,14 @@ def build_graph(
     min_chars: int = 200,
     reuse_existing: bool = True,
     trace: Any | None = None,
-    skip_normalize: bool = False,
 ):
     """Compile a StateGraph parameterised on the runtime knobs."""
-
-    next_after_extract = "score" if skip_normalize else "normalize"
 
     def _route_after_extract(state: PipelineState) -> str:
         if state.get("skip_reason"):
             log.info("graph.route", from_="extractor", decision="end", reason=state.get("skip_reason"))
             return "end"
-        return next_after_extract
+        return "normalize"
 
     async def _crawl(state: PipelineState) -> dict[str, Any]:
         return await crawler_node.run(state, fetcher=fetcher, reuse=reuse_existing, trace=trace)
@@ -69,8 +66,7 @@ def build_graph(
     graph.add_node("crawl", _crawl)
     graph.add_node("clean", _clean)
     graph.add_node("extract", _extract)
-    if not skip_normalize:
-        graph.add_node("normalize", _normalize)
+    graph.add_node("normalize", _normalize)
     graph.add_node("score", _score)
 
     graph.add_edge(START, "crawl")
@@ -81,19 +77,12 @@ def build_graph(
         {"extract": "extract", "end": END},
     )
 
-    if skip_normalize:
-        graph.add_conditional_edges(
-            "extract",
-            _route_after_extract,
-            {"score": "score", "end": END},
-        )
-    else:
-        graph.add_conditional_edges(
-            "extract",
-            _route_after_extract,
-            {"normalize": "normalize", "end": END},
-        )
-        graph.add_edge("normalize", "score")
+    graph.add_conditional_edges(
+        "extract",
+        _route_after_extract,
+        {"normalize": "normalize", "end": END},
+    )
+    graph.add_edge("normalize", "score")
     graph.add_edge("score", END)
 
     return graph.compile()
@@ -106,7 +95,6 @@ async def run_pipeline(
     use_cache: bool = True,
     min_chars: int = 200,
     reuse_existing: bool = True,
-    skip_normalize: bool = False,
 ) -> PipelineState:
     """Build + invoke + return final state for one URL."""
     lf = get_langfuse()
@@ -120,7 +108,6 @@ async def run_pipeline(
                     "use_cache": use_cache,
                     "min_chars": min_chars,
                     "reuse_existing": reuse_existing,
-                    "skip_normalize": skip_normalize,
                 },
             )
 
@@ -130,7 +117,6 @@ async def run_pipeline(
         min_chars=min_chars,
         reuse_existing=reuse_existing,
         trace=trace,
-        skip_normalize=skip_normalize,
     )
     initial = make_initial_state(url)
     try:

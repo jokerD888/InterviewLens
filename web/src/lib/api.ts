@@ -218,11 +218,11 @@ export const fetcher = <T>(path: string) => http<T>(path);
 
 /** Mutations (not cached). Used by the admin console. */
 export const mutate = {
-  ingest: (url: string, skipNormalize = false) =>
+  ingest: (url: string) =>
     http<{ ok: boolean; task_id?: string; url?: string; error?: string }>(`/admin/ingest`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, skip_normalize: skipNormalize }),
+      body: JSON.stringify({ url }),
     }),
   clearDlq: (taskName: string) =>
     http<{ cleared: number; task_name: string }>(`/admin/dlq/${encodeURIComponent(taskName)}`, {

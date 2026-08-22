@@ -1,4 +1,4 @@
-"""LangGraph state machine — Crawler → Cleaner → Extractor."""
+"""LangGraph state machine — Crawler → Cleaner → Extractor → Normalizer → Scorer."""
 from .graph import build_graph, run_pipeline
 from .recovery import resume_failed
 from .state import PipelineState, make_initial_state

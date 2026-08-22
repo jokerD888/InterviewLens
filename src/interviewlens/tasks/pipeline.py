@@ -57,7 +57,7 @@ def _dlq_push(task_name: str, payload: dict) -> None:
     max_retries=3,
     acks_late=True,
 )
-def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
+def crawl_url(self, url: str) -> dict:
     """Run the LangGraph pipeline for one URL."""
     from ..agent import run_pipeline
     from ..crawler import NowcoderFetcher
@@ -70,7 +70,6 @@ def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
                 url,
                 fetcher=fetcher,
                 use_cache=True,
-                skip_normalize=skip_normalize,
             )
         finally:
             await fetcher.stop()
@@ -91,7 +90,7 @@ def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
         if self.request.retries >= (self.max_retries or 0):
             _dlq_push(
                 "il.crawl_url",
-                {"url": url, "error": f"{type(exc).__name__}: {exc}", "skip_normalize": skip_normalize},
+                {"url": url, "error": f"{type(exc).__name__}: {exc}"},
             )
         raise
 
@@ -99,7 +98,7 @@ def crawl_url(self, url: str, *, skip_normalize: bool = False) -> dict:
 # --------------------------------------------------------------- enqueue_listing
 
 @celery_app.task(name="il.enqueue_listing")
-def enqueue_listing(pages: int = 1, source: str = "experience", skip_normalize: bool = False) -> dict:
+def enqueue_listing(pages: int = 1, source: str = "experience") -> dict:
     """Discover URLs from listing pages and dispatch ``crawl_url`` per item."""
     from ..crawler import NowcoderFetcher, discover_from_listing
 
@@ -116,7 +115,7 @@ def enqueue_listing(pages: int = 1, source: str = "experience", skip_normalize: 
 
     enqueued = 0
     for url in urls:
-        crawl_url.delay(url, skip_normalize=skip_normalize)
+        crawl_url.delay(url)
         enqueued += 1
     return {"discovered": len(urls), "enqueued": enqueued}
 
@@ -177,7 +176,7 @@ def dlq_drain(task_name: str = "il.crawl_url", limit: int = 50) -> int:
             break
         payload = json.loads(raw)
         if task_name == "il.crawl_url":
-            crawl_url.delay(payload.get("url"), skip_normalize=payload.get("skip_normalize", False))
+            crawl_url.delay(payload.get("url"))
         elif task_name == "il.aggregate_pair":
             aggregate_pair.delay(
                 payload.get("company"),

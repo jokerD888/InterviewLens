@@ -385,7 +385,6 @@ def graph(
     no_cache: bool = typer.Option(False, "--no-cache"),
     no_reuse: bool = typer.Option(False, "--no-reuse", help="Force refetch even if URL already crawled"),
     min_chars: int = typer.Option(200),
-    skip_normalize: bool = typer.Option(False, "--skip-normalize", help="Bypass Normalizer node (faster cold start)"),
 ) -> None:
     """Run the LangGraph state-machine pipeline (D4+D6)."""
     from .agent import run_pipeline
@@ -401,7 +400,6 @@ def graph(
                 use_cache=not no_cache,
                 min_chars=min_chars,
                 reuse_existing=not no_reuse,
-                skip_normalize=skip_normalize,
             )
         finally:
             await fetcher.stop()

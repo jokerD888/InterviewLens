@@ -128,7 +128,6 @@ export default function AdminPage() {
 /* ── Manual ingest (POST /admin/ingest) ─────────────────────────────── */
 function IngestForm() {
   const [url, setUrl] = useState("");
-  const [skipNormalize, setSkipNormalize] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -139,7 +138,7 @@ function IngestForm() {
     setBusy(true);
     setResult(null);
     try {
-      const r = await apiMutate.ingest(u, skipNormalize);
+      const r = await apiMutate.ingest(u);
       if (r.ok) {
         setResult({ ok: true, msg: `已入队 · task ${r.task_id?.slice(0, 8)}…` });
         setUrl("");
@@ -171,15 +170,6 @@ function IngestForm() {
           入队
         </button>
       </div>
-      <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted">
-        <input
-          type="checkbox"
-          checked={skipNormalize}
-          onChange={(e) => setSkipNormalize(e.target.checked)}
-          className="accent-accent"
-        />
-        跳过归一化 (skip_normalize)
-      </label>
       {result && (
         <p className={cn("font-mono text-[11px]", result.ok ? "text-good" : "text-bad")}>{result.msg}</p>
       )}

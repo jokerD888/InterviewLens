@@ -102,8 +102,7 @@ def ingest(payload: dict = Body(..., examples=[{"url": "https://www.nowcoder.com
     url = payload.get("url")
     if not url:
         return {"ok": False, "error": "missing url"}
-    skip_normalize = bool(payload.get("skip_normalize", False))
-    res = crawl_url.delay(url, skip_normalize=skip_normalize)
+    res = crawl_url.delay(url)
     return {"ok": True, "task_id": res.id, "url": url}
 
 

@@ -40,10 +40,6 @@ uv run il graph "https://www.nowcoder.com/discuss/<id>"
 ```
 HF_ENDPOINT=https://hf-mirror.com
 ```
-或者临时跳过 normalize 节点：
-```bash
-uv run il graph <url> --skip-normalize
-```
 
 ## 3. 单点测试归一化
 
