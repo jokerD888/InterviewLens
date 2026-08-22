@@ -4,6 +4,7 @@ embedding similarity, then ask DeepSeek to summarise into markdown.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,6 +50,7 @@ MIN_CONTENT_SCORE = 30
 MIN_QUALITY_SCORE = MIN_CONTENT_SCORE
 MAX_OUTPUT_ATTEMPTS = 2  # initial generation + one corrective prompt
 MAX_TRANSPORT_ATTEMPTS = 3
+AGGREGATOR_FINGERPRINT_VERSION = 1
 
 
 class AggregatorOutputError(RuntimeError):
@@ -212,6 +214,47 @@ def _cluster_questions(
 def _normalise_question_text(value: str) -> str:
     """Normalise only whitespace for source-question membership checks."""
     return " ".join(value.split())
+
+
+def _build_input_fingerprint(
+    *,
+    questions: list[dict],
+    period: str,
+    top_n: int,
+    min_quality: int,
+    dedup_threshold: float,
+) -> str:
+    """Build a stable cache key for every input that affects a summary.
+
+    The list order is intentional: SQL selection order determines the top-N
+    boundary and the greedy clustering result.  The version must be bumped
+    when the aggregation algorithm, prompt, or embedding contract changes.
+    """
+    payload = {
+        "fingerprint_version": AGGREGATOR_FINGERPRINT_VERSION,
+        "period": period,
+        "top_n": top_n,
+        "min_quality": min_quality,
+        "dedup_threshold": dedup_threshold,
+        "chat_model": settings.deepseek_model_chat,
+        "embedding_model": settings.embedding_model,
+        "questions": [
+            {
+                "id": q.get("id"),
+                "content": q.get("content"),
+                "category": q.get("category"),
+                "content_score": q.get("content_score"),
+            }
+            for q in questions
+        ],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _parse_aggregator_output(
@@ -451,7 +494,17 @@ async def aggregate_one(
             skip_reason="no_questions",
         )
 
-    # Skip if summary already exists and question count hasn't changed
+    input_fingerprint = _build_input_fingerprint(
+        questions=raw,
+        period=period_label,
+        top_n=top_n,
+        min_quality=min_quality,
+        dedup_threshold=dedup_threshold,
+    )
+
+    # Skip only when the complete aggregation input and algorithm contract
+    # match.  Counts alone cannot detect replacement questions or parameter
+    # changes, and sample_count is a presentation field rather than a cache key.
     if write:
         async with session_scope() as session:
             existing = (
@@ -463,8 +516,14 @@ async def aggregate_one(
                     )
                 )
             ).scalar_one_or_none()
-        if existing is not None and existing.sample_count == len(raw):
-            log.info("aggregate.cached", company=company, position=position, period=period_label, samples=len(raw))
+        if existing is not None and existing.input_fingerprint == input_fingerprint:
+            log.info(
+                "aggregate.cached",
+                company=company,
+                position=position,
+                period=period_label,
+                samples=len(raw),
+            )
             return AggregateOutcome(
                 company_id=c_id,
                 position_id=p_id,
@@ -511,20 +570,22 @@ async def aggregate_one(
                         position_id=p_id,
                         period=period_label,
                         content_md=summary_md,
-                        sample_count=len(clusters),
+                        sample_count=len(raw),
+                        input_fingerprint=input_fingerprint,
                         updated_at=now,
                     )
                 )
             else:
                 existing.content_md = summary_md
-                existing.sample_count = len(clusters)
+                existing.sample_count = len(raw)
+                existing.input_fingerprint = input_fingerprint
                 existing.updated_at = now
 
     return AggregateOutcome(
         company_id=c_id,
         position_id=p_id,
         period=period_label,
-        sample_count=len(clusters),
+        sample_count=len(raw),
         summary_chars=len(summary_md),
         cache_hit_questions=0,
         written=write,

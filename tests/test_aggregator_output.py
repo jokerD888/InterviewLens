@@ -9,6 +9,30 @@ import pytest
 from interviewlens.aggregator import aggregator
 
 
+def test_input_fingerprint_is_stable_and_changes_with_content() -> None:
+    questions = [
+        {
+            "id": 1,
+            "content": "Redis 分布式锁怎么实现？",
+            "category": "数据库",
+            "content_score": 60,
+        }
+    ]
+    kwargs = {
+        "questions": questions,
+        "period": "2026Q3",
+        "top_n": 100,
+        "min_quality": 30,
+        "dedup_threshold": 0.92,
+    }
+    first = aggregator._build_input_fingerprint(**kwargs)
+    assert first == aggregator._build_input_fingerprint(**kwargs)
+
+    changed = [dict(questions[0], content="Redis 分布式锁如何续期？")]
+    changed_kwargs = {**kwargs, "questions": changed}
+    assert first != aggregator._build_input_fingerprint(**changed_kwargs)
+
+
 def _valid_payload() -> dict:
     return {
         "high_frequency_topics": [

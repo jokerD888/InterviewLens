@@ -62,6 +62,8 @@ posts.questions
 
 **输出可靠性**：Aggregator 使用 `response_format=json_object`，但不把 JSON mode 当作业务 schema。响应先经 `json.loads`，失败时尝试 `json-repair`，再由 `llm/aggregator_schema.py` 的 `AggregatorResult` 做 Pydantic 校验；题目引用还要能在当前输入 bucket 中找到。空输出、解析失败或校验失败时最多追加一次纠正提示，网络/API 异常由独立的指数退避处理。两次内容尝试都失败时不写入未经校验的摘要，批量任务跳过当前 bucket。
 
+**缓存有效性**：`summaries.input_fingerprint` 保存有序输入题目、筛选参数、去重阈值、模型和指纹版本的 SHA-256。它不再用 `sample_count` 比较 `raw`/`clusters` 数量，因此去重后不会永远 miss，数量相同但内容变化也不会错误命中。`sample_count` 表示实际送入聚合的原始题目数；旧摘要没有指纹时会在下次运行自动重算。
+
 ## 4. 单桶 vs 全桶
 
 ```bash
@@ -78,7 +80,7 @@ uv run il aggregate
 
 ```sql
 -- summaries 表内容
-SELECT s.id, c.canonical, p.canonical, s.period, s.sample_count, length(s.content_md) AS chars
+SELECT s.id, c.canonical, p.canonical, s.period, s.sample_count, s.input_fingerprint, length(s.content_md) AS chars
 FROM summaries s
 JOIN companies c ON c.id = s.company_id
 JOIN positions p ON p.id = s.position_id

@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS summaries (
     period       TEXT NOT NULL,
     content_md   TEXT NOT NULL,
     sample_count INT NOT NULL DEFAULT 0,
+    input_fingerprint TEXT,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (company_id, position_id, period)
 );

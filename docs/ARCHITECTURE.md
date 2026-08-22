@@ -156,7 +156,8 @@ CREATE TABLE summaries (
     position_id  BIGINT NOT NULL REFERENCES positions(id),
     period       TEXT NOT NULL,                 -- "2025Q2"
     content_md   TEXT NOT NULL,                 -- markdown 格式高频考点
-    sample_count INT,                           -- 基于多少篇面经
+    sample_count INT,                           -- 实际送入聚合的原始题目数
+    input_fingerprint TEXT,                     -- 输入与聚合参数的 SHA-256 缓存指纹
     updated_at   TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (company_id, position_id, period)
 );

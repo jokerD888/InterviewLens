@@ -100,7 +100,8 @@ class Summary(SQLModel, table=True):
     position_id: int = Field(foreign_key="positions.id")
     period: str
     content_md: str
-    sample_count: int = 0
+    sample_count: int = 0  # number of source questions used by the summary
+    input_fingerprint: str | None = None  # aggregation cache fingerprint
     updated_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 

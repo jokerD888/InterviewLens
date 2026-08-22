@@ -124,9 +124,11 @@ docker compose exec api uv run il seed-demo
 # macOS / Linux
 docker compose exec -T postgres psql -U il -d interviewlens < sql/003_content_score.sql
 docker compose exec -T postgres psql -U il -d interviewlens < sql/004_split_aliases_canonical_embeddings.sql
+docker compose exec -T postgres psql -U il -d interviewlens < sql/005_summary_input_fingerprint.sql
 # PowerShell
 Get-Content sql/003_content_score.sql | docker compose exec -T postgres psql -U il -d interviewlens
 Get-Content sql/004_split_aliases_canonical_embeddings.sql | docker compose exec -T postgres psql -U il -d interviewlens
+Get-Content sql/005_summary_input_fingerprint.sql | docker compose exec -T postgres psql -U il -d interviewlens
 docker compose exec api uv run il rescore --all
 docker compose exec api uv run il seed-aliases
 docker compose exec api uv run il backfill-canonical-embeddings
@@ -134,6 +136,7 @@ docker compose exec api uv run il backfill-canonical-embeddings
 
 迁移不会直接复制旧的 `quality_score`，因为旧分数可能已经包含时间衰减，无法无损还原为内容分。
 `004` 会把旧 `alias_dict` 按实体类型迁移到 `company_aliases` 和 `position_aliases`，同时为 `companies` / `positions` 增加向量列和 HNSW 索引；迁移前会检查孤儿 canonical 引用，发现异常时整笔事务回滚。
+`005` 为 `summaries` 增加 Aggregator 输入指纹列；已有摘要指纹为空，会在下一次聚合时自动重算并补齐。
 
 ## 常用工作流
 
@@ -262,7 +265,8 @@ sql/
 ├── 001_init.sql             # 初始 schema
 ├── 002_answer_ai.sql        # AI 答案字段
 ├── 003_content_score.sql    # 内容分迁移
-└── 004_split_aliases_canonical_embeddings.sql  # 别名拆表与 canonical 向量迁移
+├── 004_split_aliases_canonical_embeddings.sql  # 别名拆表与 canonical 向量迁移
+└── 005_summary_input_fingerprint.sql           # Aggregator 输入指纹
 
 web/                         # Next.js 前端
 tests/                       # 单元测试和行为测试
