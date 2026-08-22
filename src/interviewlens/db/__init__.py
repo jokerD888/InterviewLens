@@ -14,6 +14,7 @@ from .repositories import (
     replace_post_links,
     replace_questions,
     set_cleaned_text,
+    set_content_score,
     set_quality_score,
     upsert_raw_post,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "replace_questions",
     "session_scope",
     "set_cleaned_text",
+    "set_content_score",
     "set_quality_score",
     "upsert_raw_post",
 ]

@@ -8,6 +8,7 @@ are caught and downgraded to tier4.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import openai
 import pytest
@@ -50,20 +51,78 @@ async def test_llm_failure_degrades_to_new_canonical(monkeypatch: pytest.MonkeyP
 
     created: list[str] = []
 
-    async def _create(entity_type, name):
+    async def _persist_new(entity_type, alias, name):
         created.append(name)
-        return 42
-
-    async def _write_alias(entity_type, alias, canonical_id, confidence):
-        return None
+        return res.ResolveResult(canonical_id=42, confidence=0.5, source="new")
 
     monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
     monkeypatch.setattr(res, "_list_canonicals", _no_canonicals)
     monkeypatch.setattr(res, "call_tool", _api_error)
-    monkeypatch.setattr(res, "_create_canonical", _create)
-    monkeypatch.setattr(res, "_write_alias", _write_alias)
+    monkeypatch.setattr(res, "_persist_new_canonical", _persist_new)
 
     result = await res.resolve_entity("company", "字节跳动")
     assert result.source == "new"
     assert result.canonical_id == 42
     assert created  # a new canonical was created (degraded path taken)
+
+
+@pytest.mark.asyncio
+async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A guessed id must be validated against the requested entity table."""
+    async def _no_alias(entity_type, alias):
+        return None
+
+    async def _no_canonicals(entity_type):
+        return []
+
+    async def _wrong_id(entity_type, canonical_id):
+        return False
+
+    async def _persist_new(entity_type, alias, name):
+        return res.ResolveResult(canonical_id=7, confidence=0.5, source="new")
+
+    def _tool(**kwargs):
+        return SimpleNamespace(
+            arguments={"decision": "match", "canonical_id": 99, "confidence": 0.95}
+        )
+
+    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
+    monkeypatch.setattr(res, "_list_canonicals", _no_canonicals)
+    monkeypatch.setattr(res, "_canonical_exists", _wrong_id)
+    monkeypatch.setattr(res, "call_tool", _tool)
+    monkeypatch.setattr(res, "_persist_new_canonical", _persist_new)
+
+    result = await res.resolve_entity("company", "未知公司")
+
+    assert result == res.ResolveResult(canonical_id=7, confidence=0.5, source="new")
+
+
+@pytest.mark.asyncio
+async def test_alias_conflict_returns_database_winner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A losing resolver must use the canonical already stored for the alias."""
+    async def _no_alias(entity_type, alias):
+        return None
+
+    async def _canonicals(entity_type):
+        return [(1, "字节跳动")]
+
+    async def _embedding(texts):
+        return None
+
+    def _similarity(query, gallery):
+        import numpy as np
+
+        return np.asarray([[0.95]], dtype=np.float32)
+
+    async def _write_alias(entity_type, alias, canonical_id, confidence):
+        return 2, 0.91, False
+
+    monkeypatch.setattr(res, "_lookup_alias_dict", _no_alias)
+    monkeypatch.setattr(res, "_list_canonicals", _canonicals)
+    monkeypatch.setattr(res, "embed_texts", _embedding)
+    monkeypatch.setattr(res, "cosine_matrix", _similarity)
+    monkeypatch.setattr(res, "_write_alias", _write_alias)
+
+    result = await res.resolve_entity("company", "字节")
+
+    assert result == res.ResolveResult(canonical_id=2, confidence=0.91, source="alias_dict")

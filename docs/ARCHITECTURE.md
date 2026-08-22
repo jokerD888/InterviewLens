@@ -48,7 +48,7 @@
 | 语言 | Python 3.13 | Go | LangGraph/Playwright 生态成熟，单机够用 |
 | 包管理 | `uv` | poetry / pip | 2025 年事实标准，速度碾压 |
 | 浏览器自动化 | Playwright | Selenium / rod | 异步 API 友好，反检测一般够用 |
-| LLM | DeepSeek-V3 | Qwen2.5 / GPT-4o | 中文+长上下文+成本（百万 token < 10 元） |
+| LLM | DeepSeek-V4 | Qwen2.5 / GPT-4o | 中文+长上下文+成本（百万 token < 10 元） |
 | Embedding | bge-m3 | text2vec / GTE | 中英混合最强，1024 维，CPU 可跑 |
 | 编排 | LangGraph | LangChain / LlamaIndex | 状态机式，断点续跑，面试讲故事好讲 |
 | 向量库 | pgvector | Qdrant / Milvus | 与关系数据同库 join，省运维 |
@@ -108,7 +108,10 @@ CREATE TABLE posts (
     cleaned_text    TEXT,                       -- trafilatura 清洗后
     posted_at       TIMESTAMPTZ,                -- 牛客上的发布时间
     fetched_at      TIMESTAMPTZ DEFAULT NOW(),
-    quality_score   INT,                        -- 0-100
+    content_score   INT,                        -- 0-70，稳定内容完整度
+    content_score_version INT DEFAULT 1,
+    content_scored_at TIMESTAMPTZ,
+    quality_score   INT,                        -- 迁移兼容字段，不参与新逻辑
     extract_status  TEXT DEFAULT 'pending',     -- pending/done/failed
     extract_error   TEXT,
     extract_version INT DEFAULT 0               -- prompt 版本，重抽时 +1
@@ -164,6 +167,8 @@ CREATE TABLE alias_dict (
 CREATE INDEX idx_alias_lookup ON alias_dict(entity_type, alias);
 ```
 
+`alias_dict.canonical_id` 是根据 `entity_type` 指向 `companies` 或 `positions` 的多态引用，当前数据库无法为它声明真实外键。Resolver 会在接受 LLM 返回的 `canonical_id` 前校验对应实体表；长期治理可拆成公司别名表和岗位别名表，以获得数据库级引用完整性。
+
 ### 2.3 设计要点
 
 - **`extract_version`**：prompt 改版后扫表把 `version < 当前` 的全部重抽，避免历史数据污染。
@@ -183,7 +188,8 @@ class PipelineState(TypedDict):
     cleaned_text: str | None
     extracted: dict | None       # {company, position, questions: [...]}
     normalized: dict | None      # {company_id, position_id, ...}
-    quality_score: int | None
+    content_score: int | None
+    content_score_version: int
     errors: list[str]
     skip_reason: str | None      # 早退原因（重复/过短）
 ```
@@ -196,7 +202,7 @@ class PipelineState(TypedDict):
 | **Cleaner** | `raw_html` | `cleaned_text` | 写 `posts.cleaned_text`；< 200 字早退 |
 | **Extractor** | `cleaned_text` | `extracted` JSON | DeepSeek Function Calling，强制 schema |
 | **Normalizer** | `extracted` | `normalized` ids | 查 `alias_dict`→ miss 调 LLM → 写回字典 |
-| **Scorer** | `extracted`, `posted_at` | `quality_score` | 写 `posts.quality_score` |
+| **Scorer** | `extracted` | `content_score` | 写稳定内容分；freshness 在查询时根据 `posted_at` 动态计算 |
 | **Aggregator** | （离线触发） | `summaries.content_md` | 按 (c,p,period) 分桶后跑 |
 
 ### 3.3 流水线时序

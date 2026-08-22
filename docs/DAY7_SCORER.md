@@ -1,26 +1,35 @@
-# Day 7 — Scorer 节点（四维度质量打分）
+# Day 7 — Scorer 节点（稳定内容分 + 动态时效分）
 
-> 目标：给每个 post 打一个 0-100 的质量分，垃圾帖一眼识别，未来 Aggregator 可以按分数过滤。
+> 目标：给每个 post 计算稳定的 0-70 内容分；推荐列表再结合发布时间动态计算 0-30 freshness。
 
 ## 0. 这一步带来什么
 
 | 之前 | 现在 |
 |---|---|
-| posts 表 quality_score 永远是 NULL | Scorer 节点写入 0-100 分数 |
+| posts 表没有稳定内容分 | Scorer 节点写入 `content_score` |
 | 不知道哪些是水帖 | `il top-posts` 一眼看高分帖 |
 | 改打分规则要重跑全流程 | `il rescore --all` 不调 LLM 直接重打 |
 
-## 1. 评分公式（4 个独立桶 + 总分上限 100）
+## 1. 内容评分公式（3 个独立桶 + 上限 70）
 
 | 维度 | 权重 | 计算 | 饱和点 |
 |---|---|---|---|
 | **题量** | 30 | 题目数 × 3 | 10 题（30）|
 | **答案** | 20 | 含 answer_brief 的题数 × 4 | 5 题（20） |
 | **轮次** | 20 | 轮次数 × 7 | 3 轮（21→cap 20） |
-| **新鲜度** | 30 | ≤3月→30 / ≤6月→25 / ≤12月→15 / ≤24月→8 / >24月→0 | 3 个月内满分 |
 
 权重在 `scoring/scorer.py` 里 `ScorerWeights` dataclass，未来想 A/B 改一行就行。
-posted_at 缺失时新鲜度为 0（**故意惩罚**，不让没日期的旧帖排过有日期的新帖）。
+
+### 1.1 动态 freshness（0~30）
+
+`score_freshness(posted_at, as_of)` 使用原始发布时间，而不是抓取时间：
+
+```text
+≤3月→30 / ≤6月→25 / ≤12月→15 / ≤24月→8 / >24月→0
+```
+
+它依赖当前时间，不写入 `content_score`。`posted_at` 缺失时 freshness 为 0；不能用
+`fetched_at` 替代，否则会把“最近抓到”误判成“最近发布”。
 
 ## 2. 跑一次看分数
 
@@ -30,8 +39,8 @@ uv run il graph "https://www.nowcoder.com/discuss/<id>"
 
 graph result 表新增两行：
 ```
-quality_score    : 78
-score_breakdown  : q=30 a=12 r=14 t=22
+content_score    : 56
+content_breakdown: q=30 a=12 r=14 total=56
 ```
 
 ## 3. 不调 LLM 重打分
@@ -42,7 +51,8 @@ uv run il rescore 5            # 重打单条
 uv run il rescore --all        # 全表重打
 ```
 
-`rescore` 从 `questions` 表反向拼出 extracted 结构，然后跑 score_extracted。0 token 消耗。
+`rescore` 从 `questions` 表反向拼出 extracted 结构，然后跑 `score_content`。0 token 消耗；
+不需要因为日期变化每天重打所有帖子。
 
 ## 4. 看排行榜
 
@@ -60,47 +70,46 @@ uv run il top-posts --position 算法工程师
 ## 5. SQL 验证
 
 ```sql
--- 分数分布直方图
+-- 内容分布直方图
 SELECT
   CASE
-    WHEN quality_score >= 80 THEN '80-100 hardcore'
-    WHEN quality_score >= 60 THEN '60-79 solid'
-    WHEN quality_score >= 40 THEN '40-59 average'
-    WHEN quality_score >= 20 THEN '20-39 thin'
-    ELSE '0-19 noise'
+    WHEN content_score >= 60 THEN '60-70 rich'
+    WHEN content_score >= 40 THEN '40-59 solid'
+    WHEN content_score >= 20 THEN '20-39 thin'
+    ELSE '0-19 sparse'
   END AS bucket,
   COUNT(*) AS cnt
 FROM posts
-WHERE quality_score IS NOT NULL
+WHERE content_score IS NOT NULL
 GROUP BY bucket
-ORDER BY MIN(quality_score) DESC;
+ORDER BY MIN(content_score) DESC;
 
--- 找潜在水帖看眼真实内容
-SELECT id, quality_score, title, source_url
+-- 找内容稀疏的帖子
+SELECT id, content_score, title, source_url
 FROM posts
-WHERE quality_score < 20 AND extract_status = 'done'
-ORDER BY quality_score
+WHERE content_score < 20 AND extract_status = 'done'
+ORDER BY content_score
 LIMIT 10;
 ```
 
 ## 6. 设计要点（面试讲故事）
 
-- **四维度独立桶**：每个维度独立饱和，避免某一维度刷爆压过其他维度
+- **三维度独立内容桶**：每个维度独立饱和，避免某一维度刷爆压过其他维度
 - **题量饱和点 10**：与其奖励"我罗列了 50 道题"，不如鼓励"我至少写了 10 道"，超过价值递减
 - **答案权重比题量小**：因为大部分牛客面经不写答案，刚性要求会让 80% 的帖子被冤枉
-- **新鲜度独立打分而不是衰减系数**：分桶给值（30/25/15/8/0）比指数衰减更可解释，调阈值方便
-- **无日期惩罚 0 而不是平均**：让未知发布时间的旧帖天然下沉
+- **新鲜度与内容分分离**：时间变化不会污染稳定内容质量；推荐场景再动态相加
+- **无日期 freshness=0**：未知发布时间不冒充近期内容
 - **rescore 不调 LLM**：questions 表存了完整结构化数据，反推 extracted 就够，**调权重 0 成本**
 - **ScorerWeights dataclass + 默认值**：未来加 A/B 实验、按公司不同权重，改 instance 就行
 
 ## 7. 验收清单
 
-- [ ] `il graph <url>` 输出 quality_score 和 score_breakdown
-- [ ] 两条对比帖，水帖（1 轮 2 题无答案）应 < 20，硬核帖（4 轮 12 题带答案）应 = 100
-- [ ] `il rescore <id>` 与 graph 输出分数一致
+- [ ] `il graph <url>` 输出 content_score 和 content_breakdown
+- [ ] 两条对比帖，水帖（1 轮 2 题无答案）内容分应为 13，硬核帖（4 轮 12 题带答案）内容分应为 70
+- [ ] `il rescore <id>` 与 graph 输出内容分一致
 - [ ] `il top-posts --limit 5` 列出最高分前 5
 - [ ] 改 `ScorerWeights` 后 `il rescore --all` 全表更新
-- [ ] `pytest tests/test_scorer.py -v` 全 6 个测试绿
+- [ ] `pytest tests/test_scorer.py -v` 全部测试通过
 
 ## 8. 下一步（D8 预告）
 

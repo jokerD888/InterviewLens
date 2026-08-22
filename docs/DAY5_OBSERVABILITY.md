@@ -50,7 +50,7 @@ uv run il metrics
 
 输出三张表：
 - **LLM cache**：hits / misses / total / hit_rate
-- **Tokens & cost**：prompt / completion / total + 估算 ¥（默认 DeepSeek-V3 1元/2元 per million）
+- **Tokens & cost**：prompt / completion / total + 估算 ¥（默认 DeepSeek-V4 1元/2元 per million）
 - **Per-node latency**：每个节点跑了多少次、平均 ms
 
 调价：

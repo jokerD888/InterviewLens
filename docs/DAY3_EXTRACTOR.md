@@ -74,7 +74,7 @@ ORDER BY round_no, id;
 | 第二次抽 token 数变 0 | cache_hit=true，正常，省钱 |
 | extract_status 一直 pending | LLM 失败了，看 `posts.extract_error` 字段 |
 
-## 7. 成本估算（DeepSeek-V3）
+## 7. 成本估算（DeepSeek-V4）
 
 - 单条面经 cleaned_text 平均 1500 tokens 输入
 - 输出 JSON 约 600 tokens

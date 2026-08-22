@@ -39,6 +39,10 @@ class QuestionOut(BaseModel):
     category: str | None = None
     answer_brief: str | None = None
     answer_ai: str | None = None
+    content_score: int | None = None
+    freshness_score: int | None = None
+    ranking_score: int | None = None
+    # Deprecated response alias for clients that still expect the old name.
     quality_score: int | None = None
     source_url: str | None = None
     similarity: float | None = None
@@ -49,6 +53,10 @@ class PostBrief(BaseModel):
     title: str | None = None
     source_url: str
     posted_at: datetime | None = None
+    content_score: int | None = None
+    freshness_score: int | None = None
+    ranking_score: int | None = None
+    # Deprecated response alias for clients that still expect the old name.
     quality_score: int | None = None
     companies: list[str] = Field(default_factory=list)
     positions: list[str] = Field(default_factory=list)
@@ -129,6 +137,9 @@ class PostFeedItem(BaseModel):
     title: str | None = None
     source_url: str
     posted_at: datetime | None = None
+    content_score: int | None = None
+    freshness_score: int | None = None
+    ranking_score: int | None = None
     companies: list[str] = Field(default_factory=list)
     positions: list[str] = Field(default_factory=list)
     cleaned_text: str | None = None

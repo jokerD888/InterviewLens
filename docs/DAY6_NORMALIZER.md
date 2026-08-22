@@ -92,12 +92,14 @@ ORDER BY learned_at DESC LIMIT 20;
 
 ## 6. 关键设计要点（面试讲故事）
 
-- **三级渐进，成本逐层升**：字典 0.1ms / embedding 10ms / LLM 500ms。命中率高的别名永远走最便宜的路径
+- **三级渐进，成本逐层升**：字典查询通常比本地 embedding 和 LLM 调用便宜；具体耗时取决于数据库、模型和部署，仓库没有统一 benchmark。命中率高的别名永远走最便宜的路径
 - **embedding 阈值双向**：上界 0.85 自动放行，下界 0.55 过滤太离谱的候选不送 LLM，省 token
-- **自学习写回**：tier 2/3 命中的别名都写回 `alias_dict`，下次直接走 tier 1。字典越用越聪明
+- **自学习写回**：tier 2/3 匹配成功或 tier 4 新建 canonical 后都会写回 `alias_dict`，下次直接走 tier 1。这里复用的是数据层映射，不是模型参数更新
 - **canonical_name 不臆造**：tier 4 新建时，如果 LLM 没给 canonical_name 就用原始 alias 作为新 canonical，避免随便起名污染数据
 - **bge-m3 选型理由**：1024 维匹配 schema；中英混合最强；CPU 可跑（GPU 自动加速）；HuggingFace 直接下
-- **新建 canonical 同时写 alias**：原始 alias 和 LLM 建议的新 canonical 名都进字典，避免下次同样的 alias 又走一次 LLM
+- **新建 canonical 同时写 alias**：成功抢占原始 alias 后，原始 alias 和 LLM 建议的新 canonical 名都进字典；如果并发时主 alias 已被别人占用，则回读胜者，不扩散本次未采用的 canonical
+- **并发写回以数据库为准**：alias 冲突后回读已保存的 canonical；tier 4 在同一事务中创建并抢占 alias，失败时清理本次新建的孤儿 canonical
+- **LLM ID 先校验**：`canonical_id` 必须存在于当前 entity_type 对应的表，不能只相信模型返回值
 
 ## 7. 验收清单
 
@@ -116,5 +118,5 @@ ORDER BY learned_at DESC LIMIT 20;
 
 ## 9. 下一步（D7 预告）
 
-D7：Scorer 节点（纯函数四维度打分：题量 / 答案 / 轮次 / 时间衰减）+ 把分数写进 posts.quality_score，
+D7：Scorer 节点（纯函数内容评分；推荐查询动态计算时间新鲜度）+ 把分数写进 posts.content_score，
 后续 Aggregator 可以按分数过滤垃圾帖。

@@ -3,12 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlmodel import select
-
-from ...db import Post, session_scope, set_quality_score
+from ...db import session_scope, set_content_score
 from ...logging import log
 from ...observability import node_span
-from ...scoring import score_extracted
+from ...scoring import CONTENT_SCORE_VERSION, score_content
 from ..state import PipelineState
 
 NODE_NAME = "scorer"
@@ -26,26 +24,28 @@ async def run(state: PipelineState, *, trace: Any | None = None) -> PipelineStat
         if state.get("skip_reason") or post_id is None:
             return {"current_node": NODE_NAME}
 
-        # Need posted_at for the recency component.
-        async with session_scope() as session:
-            post = (
-                await session.execute(select(Post).where(Post.id == post_id))
-            ).scalar_one_or_none()
-
-        posted_at = post.posted_at if post is not None else None
-        breakdown = score_extracted(state.get("extracted"), posted_at=posted_at)
+        breakdown = score_content(state.get("extracted"))
 
         async with session_scope() as session:
-            await set_quality_score(session, post_id, breakdown.total)
+            await set_content_score(
+                session,
+                post_id,
+                breakdown.total,
+                version=CONTENT_SCORE_VERSION,
+            )
 
         log.info(
             "node.done",
             node=NODE_NAME,
             post_id=post_id,
             **breakdown.as_dict(),
+            content_score_version=CONTENT_SCORE_VERSION,
         )
         return {
             "current_node": NODE_NAME,
+            "content_score": breakdown.total,
+            "content_score_breakdown": breakdown.as_dict(),
+            # Compatibility for callers that still read the old pipeline key.
             "quality_score": breakdown.total,
             "score_breakdown": breakdown.as_dict(),
         }

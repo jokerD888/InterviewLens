@@ -29,7 +29,7 @@
 
 - **聚合**：把"字节后端 100 篇散乱面经"压缩成一篇结构化 markdown
 - **语义检索**：搜"分布式锁"自动召回所有同义题（Redisson、Redlock、SETNX 都返回）
-- **质量打分**：垃圾帖一眼识别（题量、答案完整度、轮次、新鲜度四维度）
+- **内容评分与动态时效**：内容完整度持久化，推荐时再结合发布时间计算新鲜度
 - **可观测**：节点级 trace + 缓存命中率 + token 成本仪表
 
 ## 📊 实测数据（你要换成自己的数）
@@ -45,7 +45,7 @@
 \`\`\`mermaid
 flowchart LR
   URL --> Crawler --> Cleaner --> Extractor --> Normalizer --> Scorer --> END
-  Extractor -.->|调用| DeepSeek[DeepSeek-V3]
+  Extractor -.->|调用| DeepSeek[DeepSeek-V4]
   Normalizer -.->|tier 2| BGE[bge-m3 embedding]
   Normalizer -.->|tier 3| DeepSeek
   END --> BG[backfill-embeddings]
@@ -66,7 +66,7 @@ flowchart TB
 
 ## 🛠️ 技术栈
 
-后端：Python 3.13 · uv · LangGraph · DeepSeek-V3 · bge-m3 · Playwright · trafilatura · Celery · FastAPI · Pydantic v2 · SQLModel · structlog · tenacity · Langfuse
+后端：Python 3.13 · uv · LangGraph · DeepSeek-V4 · bge-m3 · Playwright · trafilatura · Celery · FastAPI · Pydantic v2 · SQLModel · structlog · tenacity · Langfuse
 存储：PostgreSQL 16 + pgvector（HNSW）· Redis 7
 前端：Next.js 15（App Router）· React 19 · TypeScript · Tailwind v3 · SWR · react-markdown · lucide-react
 
@@ -127,9 +127,9 @@ cd web && pnpm install && pnpm dev   # 启前端
 
 ### Added
 - LangGraph 6-node Agent pipeline（Crawler→Cleaner→Extractor→Normalizer→Scorer→Aggregator）
-- DeepSeek-V3 Function Calling 结构化抽取 + Redis 缓存（key 含 prompt 版本）
+- DeepSeek-V4 Function Calling 结构化抽取 + Redis 缓存（key 含 prompt 版本）
 - 三级实体归一化（alias_dict / bge-m3 embedding / DeepSeek 兜底）+ 自学习字典
-- 四维度质量打分（题量 / 答案 / 轮次 / 新鲜度）
+- 内容评分与动态时效排序（题量 / 答案 / 轮次 + 发布时间）
 - pgvector HNSW 余弦检索 + 余弦聚类去重
 - Celery + Redis 批量 + 死信队列 + Playwright 列表页发现
 - 节点级 Langfuse trace + Redis 计数缓存命中率/token 成本仪表
@@ -139,7 +139,7 @@ cd web && pnpm install && pnpm dev   # 启前端
 
 ### Stack
 - Python 3.13 (uv)
-- LangGraph 0.2.50, DeepSeek-V3, bge-m3 1024d
+- LangGraph 0.2.50, DeepSeek-V4, bge-m3 1024d
 - Postgres 16 + pgvector, Redis 7
 - Next.js 15, React 19, TypeScript 5.6, Tailwind v3
 ```

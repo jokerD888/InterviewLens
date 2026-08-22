@@ -7,7 +7,7 @@ WITH post_data AS (
         po.source_url,
         po.posted_at,
         po.cleaned_text,
-        po.quality_score,
+        po.content_score,
         po.extract_status,
         po.extract_version,
         -- companies
@@ -48,7 +48,7 @@ SELECT jsonb_pretty(jsonb_agg(jsonb_build_object(
     'title', pd.title,
     'source_url', pd.source_url,
     'posted_at', pd.posted_at,
-    'quality_score', pd.quality_score,
+    'content_score', pd.content_score,
     'extract_version', pd.extract_version,
     'companies', COALESCE(pd.companies, '[]'::json)::jsonb,
     'positions', COALESCE(pd.positions, '[]'::json)::jsonb,

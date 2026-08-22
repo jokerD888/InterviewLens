@@ -128,7 +128,7 @@ async def list_raw_questions(
     sql = sa_text("""
         SELECT q.id, q.post_id, q.round_no, q.round_type,
                q.content, q.category, q.answer_brief, q.answer_ai,
-               COALESCE(po.quality_score, 0) AS quality_score,
+               COALESCE(po.content_score, 0) AS content_score,
                po.source_url
         FROM questions q
         JOIN posts po ON po.id = q.post_id
@@ -143,7 +143,7 @@ async def list_raw_questions(
               OR CAST(:period AS TEXT) = 'all'
               OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
           )
-        ORDER BY q.category NULLS LAST, po.quality_score DESC NULLS LAST
+        ORDER BY q.category NULLS LAST, po.content_score DESC NULLS LAST
     """)
     rows = (
         await session.execute(
@@ -165,6 +165,7 @@ async def list_raw_questions(
             category=r[5],
             answer_brief=r[6],
             answer_ai=r[7],
+            content_score=r[8],
             quality_score=r[8],
             source_url=r[9],
         )
@@ -185,7 +186,7 @@ async def list_raw_questions(
     sql = sa_text("""
         SELECT q.id, q.post_id, q.round_no, q.round_type,
                q.content, q.category, q.answer_brief, q.answer_ai,
-               COALESCE(po.quality_score, 0) AS quality_score,
+               COALESCE(po.content_score, 0) AS content_score,
                po.source_url
         FROM questions q
         JOIN posts po ON po.id = q.post_id
@@ -200,7 +201,7 @@ async def list_raw_questions(
               OR CAST(:period AS TEXT) = 'all'
               OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
           )
-        ORDER BY q.category NULLS LAST, po.quality_score DESC NULLS LAST
+        ORDER BY q.category NULLS LAST, po.content_score DESC NULLS LAST
     """)
     rows = (
         await session.execute(
@@ -222,6 +223,7 @@ async def list_raw_questions(
             category=r[5],
             answer_brief=r[6],
             answer_ai=r[7],
+            content_score=r[8],
             quality_score=r[8],
             source_url=r[9],
         )

@@ -130,7 +130,7 @@ async def run_pipeline(
                         "errors": final.get("errors"),
                         "company_ids": final.get("company_ids"),
                         "position_ids": final.get("position_ids"),
-                        "quality_score": final.get("quality_score"),
+                        "content_score": final.get("content_score"),
                     }
                 )
         return final

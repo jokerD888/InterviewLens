@@ -42,6 +42,12 @@ class Post(SQLModel, table=True):
     cleaned_text: str | None = None
     posted_at: datetime | None = None
     fetched_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
+    # Stable, time-independent score used for content-quality gates.
+    content_score: int | None = Field(default=None, index=True)
+    content_score_version: int = Field(default=1, index=True)
+    content_scored_at: datetime | None = None
+    # Legacy field kept only so old databases/exports can be read during the
+    # migration. New code must not use it for ranking or filtering.
     quality_score: int | None = None
     extract_status: str = Field(default="pending", index=True)
     extract_error: str | None = None

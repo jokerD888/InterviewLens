@@ -81,6 +81,24 @@ async def set_quality_score(session: AsyncSession, post_id: int, score: int) -> 
     )
 
 
+async def set_content_score(
+    session: AsyncSession,
+    post_id: int,
+    score: int,
+    *,
+    version: int = 1,
+) -> None:
+    await session.execute(
+        update(Post)
+        .where(Post.id == post_id)
+        .values(
+            content_score=score,
+            content_score_version=version,
+            content_scored_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+    )
+
+
 async def replace_questions(
     session: AsyncSession,
     post_id: int,

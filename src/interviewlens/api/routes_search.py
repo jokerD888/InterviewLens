@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone
 
 import numpy as np
 import redis.asyncio as aioredis
@@ -17,6 +18,7 @@ from ..db import Post
 from ..embedding import embed_texts
 from ..logging import log
 from ..observability import get_redis, incr_cache
+from ..scoring import FRESHNESS_POLICY_VERSION, freshness_case_sql, ranking_score, score_freshness
 from .deps import get_session
 from .schemas import PostBrief, QuestionOut
 
@@ -40,7 +42,11 @@ def _embed_key(q: str) -> str:
 
 
 def _result_key(q: str, filters: dict) -> str:
-    canonical = json.dumps({"q": q, **filters}, sort_keys=True, ensure_ascii=False)
+    canonical = json.dumps(
+        {"q": q, "freshness_policy": FRESHNESS_POLICY_VERSION, **filters},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return f"il:search:result:v{_emb_version()}:{_sha(canonical)}"
 
 
@@ -151,6 +157,7 @@ async def search(
         "limit": limit,
         "vec": vec_str,
         "min_q": min_quality,
+        "as_of": datetime.now(timezone.utc),
     }
     joins = "JOIN posts po ON po.id = q.post_id"
     if company:
@@ -168,11 +175,18 @@ async def search(
         clauses.append("p.canonical = :position")
         params["position"] = position
     if min_quality > 0:
-        clauses.append("COALESCE(po.quality_score, 0) >= :min_q")
+        clauses.append("COALESCE(po.content_score, 0) >= :min_q")
+
+    freshness = freshness_case_sql()
 
     sql = f"""
     SELECT q.id, q.post_id, q.round_no, q.round_type, q.content, q.category,
-           q.answer_brief, q.answer_ai, po.quality_score, po.source_url,
+           q.answer_brief, q.answer_ai, po.content_score, po.content_score AS quality_score,
+           po.source_url,
+           {freshness} AS freshness_score,
+           CASE WHEN po.content_score IS NULL THEN NULL
+                ELSE po.content_score + {freshness}
+           END AS ranking_score,
            1 - (q.embedding <=> CAST(:vec AS vector)) AS similarity
     FROM questions q
     {joins}
@@ -207,12 +221,20 @@ async def get_post(
     WHERE pcp.post_id = :pid
     """
     row = (await session.execute(sa_text(sql), {"pid": post_id})).mappings().first()
+    as_of = datetime.now(timezone.utc)
+    freshness = score_freshness(post.posted_at, as_of=as_of)
     return PostBrief(
         id=post.id,
         title=post.title,
         source_url=post.source_url,
         posted_at=post.posted_at,
-        quality_score=post.quality_score,
+        content_score=post.content_score,
+        freshness_score=freshness,
+        ranking_score=ranking_score(
+            post.content_score or 0,
+            freshness,
+        ) if post.content_score is not None else None,
+        quality_score=post.content_score,
         companies=list(row["companies"] or []) if row else [],
         positions=list(row["positions"] or []) if row else [],
     )

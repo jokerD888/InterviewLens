@@ -95,7 +95,7 @@ async def _fetch_targets(
     """Select questions needing an AI answer."""
     clauses = [
         "po.extract_status = 'done'",
-        "COALESCE(po.quality_score, 0) >= :min_q",
+        "COALESCE(po.content_score, 0) >= :min_q",
     ]
     params: dict[str, object] = {"min_q": min_quality, "ver": settings.answer_prompt_version}
     if not regenerate:

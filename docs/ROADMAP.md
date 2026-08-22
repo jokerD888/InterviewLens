@@ -78,7 +78,7 @@
 - [ ] 三栏布局：左公司 / 中岗位筛选 / 右摘要
 
 ### Day 12 —— 检索体验
-- [ ] 顶部搜索框，回车走 `/posts/search`，结果列表带 quality_score 徽标
+- [ ] 顶部搜索框，回车走 `/posts/search`，结果列表带 content_score / freshness 徽标
 - [ ] 点击题目展开看原帖链接 + 答案要点
 - [ ] 关键词高亮
 
@@ -104,7 +104,7 @@
 > **InterviewLens · 面经聚合 Agent**
 > 基于 LangGraph 实现 6 节点状态机流水线（Crawler/Cleaner/Extractor/Normalizer/Scorer/Aggregator），处理 1000+ 篇牛客面经。
 >
-> - 用 DeepSeek-V3 Function Calling 强制 JSON schema 抽取，配合 Redis 缓存命中率 >85%，单条端到端成本 ≤ 0.05 元
+> - 用 DeepSeek-V4 Function Calling 强制 JSON schema 抽取，配合 Redis 缓存命中率 >85%，单条端到端成本 ≤ 0.05 元
 > - 别名归一采用"词典 + bge-m3 embedding 相似度 + LLM 兜底"三级策略，自学习写回词典；公司/岗位归一准确率 ≥ 95%
 > - PostgreSQL pgvector HNSW 索引支持百万级题目语义检索，P95 召回 < 50ms
 > - Langfuse 全链路 trace + Celery 任务幂等 + LangGraph 断点续跑，支持 prompt 版本管理与历史数据重抽

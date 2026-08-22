@@ -59,7 +59,7 @@ Per-node latency:
 
 **该读出来的信号**：
 - `hit_rate=20%` → 多数题目 cleaned_text 不完全相同（每帖 unique），缓存收益主要靠 retry。**这是事实，不需要硬刷上去。**
-- `extractor avg=4800ms` → 大头在 LLM 网络延迟，DeepSeek-V3 平均 4-6s/帖正常
+- `extractor avg=4800ms` → 大头在 LLM 网络延迟，DeepSeek-V4 平均 4-6s/帖正常
 - `normalizer avg=1200ms` → bge-m3 + LLM 兜底；如果你看到 normalizer 时间随 alias 字典增长不变，说明三级归一在 tier1/tier2 命中率高
 - `crawler avg=2400ms` → Playwright + 网络 RTT，这个数字是好的
 
@@ -145,11 +145,11 @@ uv run il metrics
 # 分数分布
 docker exec il-postgres psql -U il -d interviewlens -c "
 SELECT
-  CASE WHEN quality_score>=80 THEN '80-100'
-       WHEN quality_score>=60 THEN '60-79'
-       WHEN quality_score>=40 THEN '40-59'
-       ELSE '<40' END AS bucket,
-  COUNT(*) FROM posts WHERE quality_score IS NOT NULL GROUP BY bucket;"
+  CASE WHEN content_score>=60 THEN '60-70'
+       WHEN content_score>=40 THEN '40-59'
+       WHEN content_score>=20 THEN '20-39'
+       ELSE '0-19' END AS bucket,
+  COUNT(*) FROM posts WHERE content_score IS NOT NULL GROUP BY bucket;"
 ```
 
 把这些贴进 README 的"实测数据"段。

@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS posts (
     cleaned_text    TEXT,
     posted_at       TIMESTAMPTZ,
     fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    content_score   INT,
+    content_score_version INT NOT NULL DEFAULT 1,
+    content_scored_at TIMESTAMPTZ,
+    -- Deprecated compatibility column; ranking/filtering uses content_score.
     quality_score   INT,
     extract_status  TEXT NOT NULL DEFAULT 'pending',
     extract_error   TEXT,
@@ -46,6 +50,9 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(extract_status);
 CREATE INDEX IF NOT EXISTS idx_posts_posted ON posts(posted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_version ON posts(extract_version);
+CREATE INDEX IF NOT EXISTS idx_posts_content_score ON posts(content_score DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_status_content_score
+    ON posts(extract_status, content_score DESC);
 
 -- ----------------------------------------------------------------
 -- post_company_position (many-to-many)
@@ -120,7 +127,7 @@ SELECT
     p.id   AS position_id,
     p.canonical AS position_name,
     COUNT(DISTINCT po.id) AS post_count,
-    AVG(po.quality_score)::INT AS avg_quality,
+    AVG(po.content_score)::INT AS avg_quality,
     MAX(po.posted_at) AS latest_posted_at
 FROM post_company_position pcp
 JOIN companies c ON c.id = pcp.company_id

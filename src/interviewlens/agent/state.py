@@ -33,6 +33,9 @@ class PipelineState(TypedDict, total=False):
     position_ids: list[int]
 
     # ---- scorer (D7) --------------------------------------------------
+    content_score: int | None
+    content_score_breakdown: dict[str, int] | None
+    # Deprecated pipeline aliases; database/query code uses content_score.
     quality_score: int | None
     score_breakdown: dict[str, int] | None
 

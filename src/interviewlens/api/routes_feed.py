@@ -1,11 +1,14 @@
 """//posts — time-sorted post feed with company/position/category filters."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..crawler.cleaner import strip_nowcoder_noise
+from ..scoring import freshness_case_sql
 from .deps import get_session
 from .schemas import FeedQuestionOut, PostFeedItem
 
@@ -30,7 +33,11 @@ async def feed(
     in a second query and merged in Python).
     """
     clauses = ["po.extract_status = 'done'"]
-    params: dict[str, object] = {"limit": limit, "offset": offset}
+    params: dict[str, object] = {
+        "limit": limit,
+        "offset": offset,
+        "as_of": datetime.now(timezone.utc),
+    }
 
     if company:
         clauses.append("c.canonical = :company")
@@ -44,8 +51,14 @@ async def feed(
 
     where = " AND ".join(clauses)
 
+    freshness = freshness_case_sql()
     sql = f"""
     SELECT po.id, po.title, po.source_url, po.posted_at, po.cleaned_text,
+           po.content_score,
+           {freshness} AS freshness_score,
+           CASE WHEN po.content_score IS NULL THEN NULL
+                ELSE po.content_score + {freshness}
+           END AS ranking_score,
            array_agg(DISTINCT c.canonical) FILTER (WHERE c.canonical IS NOT NULL) AS companies,
            array_agg(DISTINCT p.canonical) FILTER (WHERE p.canonical IS NOT NULL) AS positions,
            array_agg(DISTINCT q.round_type) FILTER (WHERE q.round_type IS NOT NULL) AS round_types,
@@ -95,6 +108,9 @@ async def feed(
             title=r["title"],
             source_url=r["source_url"],
             posted_at=r["posted_at"],
+            content_score=r["content_score"],
+            freshness_score=r["freshness_score"],
+            ranking_score=r["ranking_score"],
             companies=list(r["companies"] or []),
             positions=list(r["positions"] or []),
             cleaned_text=strip_nowcoder_noise(r["cleaned_text"]) if r["cleaned_text"] else None,

@@ -35,7 +35,10 @@ from ..observability import incr_tokens
 
 DEFAULT_TOP_N = 100
 DUP_SIM_THRESHOLD = 0.92  # questions with cosine >= this collapse into one cluster
-MIN_QUALITY_SCORE = 30
+MIN_CONTENT_SCORE = 30
+# Backward-compatible import/name for CLI callers; the threshold is now
+# explicitly a stable content-completeness threshold.
+MIN_QUALITY_SCORE = MIN_CONTENT_SCORE
 
 
 @dataclass(slots=True)
@@ -84,24 +87,24 @@ async def _fetch_candidate_questions(
     period filter starves the bucket."""
     sql = """
     WITH bucket_posts AS (
-        SELECT po.id, po.posted_at, po.quality_score
+        SELECT po.id, po.posted_at, po.content_score
         FROM posts po
         JOIN post_company_position pcp ON pcp.post_id = po.id
         WHERE pcp.company_id = :c
           AND pcp.position_id = :p
           AND po.extract_status = 'done'
-          AND COALESCE(po.quality_score, 0) >= :min_q
+          AND COALESCE(po.content_score, 0) >= :min_q
           AND (
               CAST(:period AS TEXT) IS NULL
               OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
           )
     )
-    SELECT q.id, q.content, q.category, q.answer_brief, bp.quality_score, p.source_url
+    SELECT q.id, q.content, q.category, q.answer_brief, bp.content_score, p.source_url
     FROM questions q
     JOIN bucket_posts bp ON bp.id = q.post_id
     JOIN posts p ON p.id = bp.id
     WHERE q.embedding IS NOT NULL
-    ORDER BY bp.quality_score DESC NULLS LAST, q.id DESC
+    ORDER BY bp.content_score DESC NULLS LAST, q.id DESC
     LIMIT :top_n
     """
     params = {
@@ -119,6 +122,8 @@ async def _fetch_candidate_questions(
             "content": r[1],
             "category": r[2],
             "answer_brief": r[3],
+            "content_score": r[4],
+            # Compatibility for prompt/tests written before the split.
             "quality_score": r[4],
             "source_url": r[5],
         }
@@ -181,7 +186,12 @@ def _cluster_questions(
         clusters.append({**q, "freq": 1})
         centroids.append(emb)
 
-    clusters.sort(key=lambda x: (-x.get("freq", 1), -(x.get("quality_score") or 0)))
+    clusters.sort(
+        key=lambda x: (
+            -x.get("freq", 1),
+            -(x.get("content_score", x.get("quality_score")) or 0),
+        )
+    )
     return clusters
 
 
@@ -386,7 +396,7 @@ async def aggregate_all(
     JOIN companies c ON c.id = pcp.company_id
     JOIN positions p ON p.id = pcp.position_id
     JOIN posts po ON po.id = pcp.post_id
-    WHERE po.extract_status = 'done' AND COALESCE(po.quality_score, 0) >= :min_q
+    WHERE po.extract_status = 'done' AND COALESCE(po.content_score, 0) >= :min_q
     """
     async with session_scope() as session:
         pairs = (await session.execute(sa_text(sql), {"min_q": min_quality})).all()

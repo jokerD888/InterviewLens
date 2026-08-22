@@ -1,14 +1,18 @@
-"""Quality scorer for posts. Pure function — no I/O.
+"""Pure scoring functions used by the pipeline and read paths.
 
-Score = quantity(30) + answers(20) + rounds(20) + recency(30)  →  0..100
-Weights are tunable through ``ScorerWeights`` and persisted alongside the score
-so we can A/B different schemes later.
+The stable part of a post's score is its content completeness.  Freshness is
+time-dependent and therefore must be calculated with an explicit reference
+time when a result is ranked.  ``score_extracted`` remains as a compatibility
+wrapper for callers that still need the old four-component breakdown.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+CONTENT_SCORE_VERSION = 1
+FRESHNESS_POLICY_VERSION = 1
 
 
 @dataclass(slots=True)
@@ -23,7 +27,7 @@ class ScorerWeights:
     rounds_per_round: int = 7        # 3 rounds saturate
 
     recency_max: int = 30
-    # half-life buckets in months, descending
+    # Piecewise freshness buckets in months, descending.
     recency_table: list[tuple[int, int]] = field(
         default_factory=lambda: [
             (3, 30),    # ≤ 3 months → 30
@@ -52,20 +56,43 @@ class ScoreBreakdown:
         }
 
 
+@dataclass(slots=True)
+class ContentScoreBreakdown:
+    """Stable score derived only from the extracted interview content."""
+
+    quantity: int
+    answers: int
+    rounds: int
+    total: int
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "quantity": self.quantity,
+            "answers": self.answers,
+            "rounds": self.rounds,
+            "total": self.total,
+        }
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def score_extracted(
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def score_content(
     extracted: dict[str, Any] | None,
     *,
-    posted_at: datetime | None = None,
     weights: ScorerWeights | None = None,
-    now: datetime | None = None,
-) -> ScoreBreakdown:
-    """Compute the four-component quality score from an Extractor output.
+) -> ContentScoreBreakdown:
+    """Compute the stable 0..70 content-completeness score.
 
-    ``extracted`` is the JSON dict shape produced by Extractor (``ExtractedPost.model_dump()``).
+    This function intentionally does not accept ``posted_at``.  It can be
+    safely persisted and rescored without depending on the wall clock.
     """
     w = weights or ScorerWeights()
     extracted = extracted or {}
@@ -83,27 +110,80 @@ def score_extracted(
     quantity = min(n_questions * w.quantity_per_question, w.quantity_max)
     answers = min(n_with_answer * w.answers_per_filled, w.answers_max)
     rounds_score = min(n_rounds * w.rounds_per_round, w.rounds_max)
-
-    recency = 0
-    if posted_at is not None:
-        ref = now or _now_utc()
-        if posted_at.tzinfo is None:
-            posted_at = posted_at.replace(tzinfo=timezone.utc)
-        days = (ref - posted_at).days
-        months = days / 30 if days > 0 else 0
-        for cutoff, value in w.recency_table:
-            if months <= cutoff:
-                recency = value
-                break
-        # else: leave recency at 0 — older than the last bucket
-    # If posted_at unknown we award 0; harsh on purpose so that posts without
-    # any date metadata don't outrank dated ones.
-
-    total = min(quantity + answers + rounds_score + recency, 100)
-    return ScoreBreakdown(
+    total = quantity + answers + rounds_score
+    return ContentScoreBreakdown(
         quantity=quantity,
         answers=answers,
         rounds=rounds_score,
+        total=total,
+    )
+
+
+def score_freshness(
+    posted_at: datetime | None,
+    *,
+    weights: ScorerWeights | None = None,
+    as_of: datetime | None = None,
+) -> int:
+    """Compute the dynamic 0..30 freshness score from ``posted_at``.
+
+    ``as_of`` is explicit so one request can use one consistent time snapshot
+    and tests do not depend on the actual wall clock.  Unknown dates receive
+    zero; ``fetched_at`` must never be substituted for ``posted_at``.
+    """
+    if posted_at is None:
+        return 0
+
+    w = weights or ScorerWeights()
+    ref = _as_utc(as_of or _now_utc())
+    posted = _as_utc(posted_at)
+    days = max((ref - posted).total_seconds() / 86400, 0)
+    months = days / 30
+    for cutoff, value in w.recency_table:
+        if months <= cutoff:
+            return value
+    return 0
+
+
+def ranking_score(
+    content_score: int,
+    freshness_score: int,
+    *,
+    weights: ScorerWeights | None = None,
+) -> int:
+    """Combine stable content and dynamic freshness for recommendation views."""
+    w = weights or ScorerWeights()
+    return min(content_score + freshness_score, w.quantity_max + w.answers_max + w.rounds_max + w.recency_max)
+
+
+def score_extracted(
+    extracted: dict[str, Any] | None,
+    *,
+    posted_at: datetime | None = None,
+    weights: ScorerWeights | None = None,
+    now: datetime | None = None,
+) -> ScoreBreakdown:
+    """Compatibility wrapper for the former four-component score."""
+    w = weights or ScorerWeights()
+    content = score_content(extracted, weights=w)
+    recency = score_freshness(posted_at, weights=w, as_of=now)
+    total = ranking_score(content.total, recency, weights=w)
+    return ScoreBreakdown(
+        quantity=content.quantity,
+        answers=content.answers,
+        rounds=content.rounds,
         recency=recency,
         total=total,
     )
+
+
+def freshness_case_sql(*, posted_at_sql: str = "po.posted_at", as_of_param: str = ":as_of") -> str:
+    """Return the PostgreSQL CASE expression used by dynamic ranking queries."""
+    return f"""CASE
+        WHEN {posted_at_sql} IS NULL THEN 0
+        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '90 days' THEN 30
+        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '180 days' THEN 25
+        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '360 days' THEN 15
+        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '720 days' THEN 8
+        ELSE 0
+    END"""

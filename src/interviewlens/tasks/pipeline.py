@@ -78,7 +78,7 @@ def crawl_url(self, url: str) -> dict:
             "post_id": final.get("post_id"),
             "skip_reason": final.get("skip_reason"),
             "errors": final.get("errors"),
-            "quality_score": final.get("quality_score"),
+            "content_score": final.get("content_score"),
             "company_ids": final.get("company_ids"),
             "position_ids": final.get("position_ids"),
         }

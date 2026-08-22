@@ -3,8 +3,9 @@
 API: ``resolve_entity(entity_type, alias) -> (canonical_id, confidence, source)``
 
 source is one of: "alias_dict" | "embedding" | "llm" | "new".
-The function self-learns: if embedding or LLM produces a high-confidence match,
-the alias is written back to ``alias_dict`` so the next call short-circuits.
+The function self-learns at the data layer: embedding/LLM matches and tier-4
+new canonicals write an alias mapping back to ``alias_dict`` so later calls can
+short-circuit. This does not update model parameters.
 """
 from __future__ import annotations
 
@@ -65,39 +66,126 @@ async def _list_canonicals(entity_type: str) -> list[tuple[int, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
+async def _claim_alias(
+    session,
+    entity_type: str,
+    alias: str,
+    canonical_id: int,
+    confidence: float,
+) -> tuple[int, float, bool]:
+    """Insert an alias and return the database's winning mapping.
+
+    ``DO NOTHING`` protects the unique key, but the caller must use the row
+    already stored in the database when another resolver won the race.  The
+    third return value tells the caller whether this invocation inserted the
+    mapping.
+    """
+    stmt = pg_insert(AliasDict).values(
+        entity_type=entity_type,
+        alias=alias,
+        canonical_id=canonical_id,
+        confidence=confidence,
+    )
+    stmt = (
+        stmt.on_conflict_do_nothing(index_elements=["entity_type", "alias"])
+        .returning(AliasDict.canonical_id, AliasDict.confidence)
+    )
+    row = (await session.execute(stmt)).first()
+    if row is not None:
+        return int(row[0]), float(row[1]), True
+
+    existing = (
+        await session.execute(
+            select(AliasDict.canonical_id, AliasDict.confidence).where(
+                AliasDict.entity_type == entity_type,
+                AliasDict.alias == alias,
+            )
+        )
+    ).one()
+    return int(existing[0]), float(existing[1]), False
+
+
 async def _write_alias(
     entity_type: str,
     alias: str,
     canonical_id: int,
     confidence: float,
-) -> None:
-    """Idempotent alias_dict insert. Skip silently on duplicate."""
+) -> tuple[int, float, bool]:
+    """Persist an alias and return the database's winning mapping."""
     async with session_scope() as session:
-        stmt = pg_insert(AliasDict).values(
-            entity_type=entity_type,
-            alias=alias,
-            canonical_id=canonical_id,
-            confidence=confidence,
-        )
-        # Postgres ON CONFLICT DO NOTHING via the unique (entity_type, alias)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["entity_type", "alias"])
-        await session.execute(stmt)
+        return await _claim_alias(session, entity_type, alias, canonical_id, confidence)
 
 
-async def _create_canonical(entity_type: str, name: str) -> int:
-    """Insert a new canonical row and return its id (idempotent on canonical)."""
+async def _get_or_create_canonical(
+    session,
+    entity_type: str,
+    name: str,
+) -> tuple[int, bool]:
+    """Atomically get or create a canonical row.
+
+    Returns ``(id, created_here)``.  The insert conflict is resolved by the
+    database unique constraint, then the already committed row is read back.
+    """
+    Model = _model_for(entity_type)
+    stmt = (
+        pg_insert(Model)
+        .values(canonical=name)
+        .on_conflict_do_nothing(index_elements=["canonical"])
+        .returning(Model.id)
+    )
+    row = (await session.execute(stmt)).first()
+    if row is not None:
+        return int(row[0]), True
+
+    existing = (
+        await session.execute(select(Model.id).where(Model.canonical == name))
+    ).scalar_one()
+    return int(existing), False
+
+
+async def _canonical_exists(entity_type: str, canonical_id: int) -> bool:
+    """Validate an LLM-selected id against the requested entity table."""
     Model = _model_for(entity_type)
     async with session_scope() as session:
-        existing = (
-            await session.execute(select(Model).where(Model.canonical == name))
+        row = (
+            await session.execute(select(Model.id).where(Model.id == canonical_id))
         ).scalar_one_or_none()
-        if existing is not None:
-            return existing.id  # type: ignore[return-value]
-        row = Model(canonical=name)
-        session.add(row)
-        await session.flush()
-        new_id = row.id
-    return int(new_id)
+    return row is not None
+
+
+async def _persist_new_canonical(
+    entity_type: str,
+    alias: str,
+    new_name: str,
+) -> ResolveResult:
+    """Create/claim tier-4 data without leaving a losing canonical orphan."""
+    confidence = 0.5
+    Model = _model_for(entity_type)
+    async with session_scope() as session:
+        new_id, created_here = await _get_or_create_canonical(session, entity_type, new_name)
+        winner_id, winner_confidence, claimed = await _claim_alias(
+            session,
+            entity_type,
+            alias,
+            new_id,
+            confidence,
+        )
+
+        if not claimed:
+            if created_here:
+                row = await session.get(Model, new_id)
+                if row is not None:
+                    await session.delete(row)
+            return ResolveResult(
+                canonical_id=winner_id,
+                confidence=winner_confidence,
+                source="alias_dict",
+            )
+
+        if new_name != alias:
+            await _claim_alias(session, entity_type, new_name, new_id, confidence)
+
+    return ResolveResult(canonical_id=new_id, confidence=confidence, source="new")
 
 
 # ---------------------------------------------------------------- main
@@ -140,18 +228,24 @@ async def resolve_entity(
         ]
         best = top[0]
         if best["similarity"] >= EMBED_THRESHOLD_HIGH:
-            await _write_alias(entity_type, alias, best["id"], confidence=best["similarity"])
+            winner_id, winner_confidence, claimed = await _write_alias(
+                entity_type,
+                alias,
+                best["id"],
+                confidence=best["similarity"],
+            )
             log.info(
                 "normalize.tier2_hit",
                 entity_type=entity_type,
                 alias=alias,
-                id=best["id"],
-                sim=best["similarity"],
+                id=winner_id,
+                sim=winner_confidence,
+                alias_claimed=claimed,
             )
             return ResolveResult(
-                canonical_id=best["id"],
-                confidence=float(best["similarity"]),
-                source="embedding",
+                canonical_id=winner_id,
+                confidence=winner_confidence,
+                source="embedding" if claimed else "alias_dict",
             )
         # filter out very low-similarity candidates before sending to LLM
         candidates_for_llm = [c for c in top if c["similarity"] >= EMBED_THRESHOLD_LOW]
@@ -185,30 +279,42 @@ async def resolve_entity(
         decision = None
 
     if decision and decision.get("decision") == "match" and decision.get("canonical_id"):
-        cid = int(decision["canonical_id"])
-        conf = float(decision.get("confidence") or 0.5)
-        if conf >= LLM_MIN_CONFIDENCE:
-            await _write_alias(entity_type, alias, cid, confidence=conf)
+        try:
+            cid = int(decision["canonical_id"])
+            conf = float(decision.get("confidence") or 0.5)
+        except (TypeError, ValueError):
+            cid = 0
+            conf = 0.0
+        if cid and conf >= LLM_MIN_CONFIDENCE and await _canonical_exists(entity_type, cid):
+            winner_id, winner_confidence, claimed = await _write_alias(
+                entity_type,
+                alias,
+                cid,
+                confidence=conf,
+            )
             log.info(
                 "normalize.tier3_match",
                 entity_type=entity_type,
                 alias=alias,
-                id=cid,
-                confidence=conf,
+                id=winner_id,
+                confidence=winner_confidence,
+                alias_claimed=claimed,
             )
-            return ResolveResult(canonical_id=cid, confidence=conf, source="llm")
+            return ResolveResult(
+                canonical_id=winner_id,
+                confidence=winner_confidence,
+                source="llm" if claimed else "alias_dict",
+            )
 
     # --- tier 4: create a new canonical
     new_name = (decision or {}).get("canonical_name") or alias
-    new_id = await _create_canonical(entity_type, new_name)
-    await _write_alias(entity_type, alias, new_id, confidence=1.0)
-    if new_name != alias:
-        await _write_alias(entity_type, new_name, new_id, confidence=1.0)
+    result = await _persist_new_canonical(entity_type, alias, new_name)
     log.info(
-        "normalize.tier4_new",
+        "normalize.tier4_new" if result.source == "new" else "normalize.alias_race_winner",
         entity_type=entity_type,
         alias=alias,
         new_canonical=new_name,
-        id=new_id,
+        id=result.canonical_id,
+        source=result.source,
     )
-    return ResolveResult(canonical_id=new_id, confidence=0.5, source="new")
+    return result

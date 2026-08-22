@@ -1,4 +1,26 @@
 """Scoring package."""
-from .scorer import ScoreBreakdown, ScorerWeights, score_extracted
+from .scorer import (
+    CONTENT_SCORE_VERSION,
+    FRESHNESS_POLICY_VERSION,
+    ContentScoreBreakdown,
+    ScoreBreakdown,
+    ScorerWeights,
+    freshness_case_sql,
+    ranking_score,
+    score_content,
+    score_extracted,
+    score_freshness,
+)
 
-__all__ = ["ScoreBreakdown", "ScorerWeights", "score_extracted"]
+__all__ = [
+    "ContentScoreBreakdown",
+    "CONTENT_SCORE_VERSION",
+    "FRESHNESS_POLICY_VERSION",
+    "ScoreBreakdown",
+    "ScorerWeights",
+    "freshness_case_sql",
+    "ranking_score",
+    "score_content",
+    "score_extracted",
+    "score_freshness",
+]

@@ -68,7 +68,9 @@ curl 'http://localhost:8000/posts/search?q=ZSet&min_quality=60'
     "content": "Redis 分布式锁的实现，Redisson 是怎么做的？",
     "category": "数据库",
     "answer_brief": "...",
-    "quality_score": 78,
+    "content_score": 56,
+    "freshness_score": 22,
+    "ranking_score": 78,
     "source_url": "https://www.nowcoder.com/discuss/...",
     "similarity": 0.872
   }

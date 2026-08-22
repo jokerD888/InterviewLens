@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import typer
 from rich.console import Console
@@ -189,6 +190,8 @@ def reset(
                         extract_status="pending",
                         extract_error=None,
                         extract_version=0,
+                        content_score=None,
+                        content_scored_at=None,
                         quality_score=None,
                     )
                 )
@@ -256,6 +259,8 @@ def show_post(
         meta.add_row("title", row.title or "")
         meta.add_row("posted_at", str(row.posted_at))
         meta.add_row("fetched_at", str(row.fetched_at))
+        meta.add_row("content_score", str(row.content_score) if row.content_score is not None else "(none)")
+        meta.add_row("content_score_version", str(row.content_score_version))
         meta.add_row("extract_status", row.extract_status)
         meta.add_row("extract_version", str(row.extract_version))
         meta.add_row("cleaned_chars", str(len(row.cleaned_text or "")))
@@ -414,12 +419,12 @@ def graph(
         meta.add_row("cache_hit", "yes" if final.get("extract_cache_hit") else "no")
         meta.add_row("company_ids", ", ".join(map(str, final.get("company_ids") or [])) or "(none)")
         meta.add_row("position_ids", ", ".join(map(str, final.get("position_ids") or [])) or "(none)")
-        meta.add_row("quality_score", str(final.get("quality_score")) if final.get("quality_score") is not None else "(none)")
-        if final.get("score_breakdown"):
-            br = final["score_breakdown"]
+        meta.add_row("content_score", str(final.get("content_score")) if final.get("content_score") is not None else "(none)")
+        if final.get("content_score_breakdown") or final.get("score_breakdown"):
+            br = final.get("content_score_breakdown") or final["score_breakdown"]
             meta.add_row(
-                "score_breakdown",
-                f"q={br.get('quantity')} a={br.get('answers')} r={br.get('rounds')} t={br.get('recency')}",
+                "content_breakdown",
+                f"q={br.get('quantity')} a={br.get('answers')} r={br.get('rounds')} total={br.get('total')}",
             )
         meta.add_row("errors", "; ".join(final.get("errors") or []) or "(none)")
         if final.get("extract_usage"):
@@ -610,12 +615,12 @@ def aliases(
 # ---------------------------------------------------------------- rescore
 @app.command()
 def rescore(
-    post_id: int = typer.Argument(..., help="Post id to recompute quality_score for"),
+    post_id: int | None = typer.Argument(None, help="Post id to recompute content_score for"),
     rescore_all: bool = typer.Option(False, "--all", help="Ignore post_id, rescore every post with extracted data"),
 ) -> None:
-    """Recompute Scorer output from existing questions table (no LLM call)."""
+    """Recompute stable content scores from the existing questions table."""
     from .db import Question
-    from .scoring import score_extracted
+    from .scoring import CONTENT_SCORE_VERSION, score_content
 
     async def _build_extracted(s, pid: int) -> dict | None:
         rows = (
@@ -643,8 +648,16 @@ def rescore(
             if post is None:
                 return pid, -1, None
             extracted = await _build_extracted(s, pid)
-            br = score_extracted(extracted, posted_at=post.posted_at)
-            await s.execute(sa_update(Post).where(Post.id == pid).values(quality_score=br.total))
+            br = score_content(extracted)
+            await s.execute(
+                sa_update(Post)
+                .where(Post.id == pid)
+                .values(
+                    content_score=br.total,
+                    content_score_version=CONTENT_SCORE_VERSION,
+                    content_scored_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
         return pid, br.total, br.as_dict()
 
     async def _run() -> None:
@@ -671,11 +684,14 @@ def rescore(
                 table.add_row(
                     str(pid),
                     str(total),
-                    f"q={br['quantity']} a={br['answers']} r={br['rounds']} t={br['recency']}" if br else "(no data)",
+                    f"q={br['quantity']} a={br['answers']} r={br['rounds']} total={br['total']}" if br else "(no data)",
                 )
             console.print(table)
             return
 
+        if post_id is None:
+            console.print("[red]post_id is required unless --all is set[/red]")
+            raise typer.Exit(code=2)
         pid, total, br = await _do_one(post_id)
         if total == -1:
             console.print(f"[red]post {post_id} not found[/red]")
@@ -688,7 +704,7 @@ def rescore(
             meta.add_row("quantity", str(br["quantity"]))
             meta.add_row("answers", str(br["answers"]))
             meta.add_row("rounds", str(br["rounds"]))
-            meta.add_row("recency", str(br["recency"]))
+            meta.add_row("content_score", str(br["total"]))
         console.print(meta)
 
     asyncio.run(_run())
@@ -701,12 +717,14 @@ def top_posts(
     company: str | None = typer.Option(None, help="Filter by canonical company name"),
     position: str | None = typer.Option(None, help="Filter by canonical position name"),
 ) -> None:
-    """List highest-quality posts, optionally filtered by company/position."""
+    """List recommended posts using content score plus dynamic freshness."""
     from sqlalchemy import text as sa_text
+    from .scoring import freshness_case_sql
 
     async def _run() -> None:
-        params: dict[str, object] = {"limit": limit}
-        clauses = ["po.quality_score IS NOT NULL"]
+        as_of = datetime.now(timezone.utc)
+        params: dict[str, object] = {"limit": limit, "as_of": as_of}
+        clauses = ["po.content_score IS NOT NULL"]
         joins = ""
         if company:
             joins += (
@@ -722,11 +740,14 @@ def top_posts(
             )
             clauses.append("p.canonical = :position")
             params["position"] = position
+        freshness = freshness_case_sql()
         sql = (
-            "SELECT po.id, po.title, po.quality_score, po.posted_at, po.source_url"
+            "SELECT po.id, po.title, po.content_score, po.posted_at, po.source_url, "
+            f"{freshness} AS freshness_score, "
+            f"(po.content_score + {freshness}) AS ranking_score"
             f" FROM posts po{joins}"
             f" WHERE {' AND '.join(clauses)}"
-            " ORDER BY po.quality_score DESC, po.posted_at DESC NULLS LAST"
+            " ORDER BY ranking_score DESC, po.content_score DESC, po.posted_at DESC NULLS LAST"
             " LIMIT :limit"
         )
         async with session_scope() as s:
@@ -736,12 +757,16 @@ def top_posts(
             return
         table = Table(title=f"top {len(rows)} posts" + (f" · {company}" if company else "") + (f" · {position}" if position else ""))
         table.add_column("id")
-        table.add_column("score")
+        table.add_column("content")
+        table.add_column("freshness")
+        table.add_column("ranking")
         table.add_column("title")
         for r in rows:
             table.add_row(
                 str(r[0]),
                 str(r[2]),
+                str(r[5]),
+                str(r[6]),
                 (r[1] or "")[:60],
             )
         console.print(table)
@@ -784,7 +809,7 @@ def aggregate(
     position: str | None = typer.Option(None, help="Canonical position name; required when company is given"),
     period: str | None = typer.Option(None, help='e.g. "2025Q2"; omit for "all"'),
     top_n: int = typer.Option(100),
-    min_quality: int = typer.Option(30),
+    min_content_score: int = typer.Option(30, "--min-content-score", "--min-quality"),
     no_write: bool = typer.Option(False, "--no-write", help="Print summary, don't persist"),
 ) -> None:
     """Run RAG-based summarisation per (company × position × period) bucket."""
@@ -797,7 +822,7 @@ def aggregate(
                 position=position,
                 period=period,
                 top_n=top_n,
-                min_quality=min_quality,
+                min_quality=min_content_score,
                 write=not no_write,
             )
             meta = Table(title="aggregate one", show_header=False)
@@ -819,7 +844,7 @@ def aggregate(
 
         results = await aggregate_all(
             top_n=top_n,
-            min_quality=min_quality,
+            min_quality=min_content_score,
             period=period,
             write=not no_write,
         )
@@ -1020,7 +1045,7 @@ def answer(
     company: str | None = typer.Option(None, help="Canonical company name; omit for all"),
     position: str | None = typer.Option(None, help="Canonical position name"),
     limit: int | None = typer.Option(None, help="Max questions this run"),
-    min_quality: int = typer.Option(30),
+    min_content_score: int = typer.Option(30, "--min-content-score", "--min-quality"),
     regenerate: bool = typer.Option(False, "--regenerate", help="Ignore existing answers/version"),
 ) -> None:
     """Generate difficulty-adaptive AI answers for individual questions (offline)."""
@@ -1031,7 +1056,7 @@ def answer(
             company=company,
             position=position,
             limit=limit,
-            min_quality=min_quality,
+            min_quality=min_content_score,
             regenerate=regenerate,
         )
         table = Table(title="answer", show_header=False)

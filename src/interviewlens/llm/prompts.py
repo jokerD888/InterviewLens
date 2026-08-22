@@ -263,7 +263,7 @@ def build_aggregator_messages(
 ) -> list[dict]:
     """Compose Aggregator messages — now requests JSON output.
 
-    questions: list of {content, category, freq, quality_score, source_url}
+    questions: list of {content, category, freq, content_score, source_url}
     sorted by freq desc.
     """
     lines = []

@@ -136,7 +136,7 @@ class MetricsSnapshot:
         price_in_per_million: float = 1.0,
         price_out_per_million: float = 2.0,
     ) -> float:
-        """Rough DeepSeek-V3 default pricing (2025-06): 1元/2元 per million tokens."""
+        """Rough DeepSeek default pricing: 1元/2元 per million tokens (configurable)."""
         return (
             self.tokens_prompt / 1_000_000 * price_in_per_million
             + self.tokens_completion / 1_000_000 * price_out_per_million

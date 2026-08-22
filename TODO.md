@@ -13,7 +13,7 @@
 | 1 | 循环导入：`embedding` / `llm` / `crawler` 三个包内部 `..self` 自引用 | `embedding/backfill.py` `llm/orchestrator.py` `crawler/orchestrator.py` | 改为模块内直接 `from .xxx import` |
 | 2 | `created_at` / `fetched_at` 等列 NOT NULL 但 ORM 默认 None | `db/models.py` | 改为 `default_factory=_now` + `server_default` |
 | 3 | `seed_demo.py` / `repositories.py` / `aggregator.py` 使用 `datetime.now(timezone.utc)`（带时区）写入无时区列 | 对应文件 | 改为 `.replace(tzinfo=None)` |
-| 4 | DeepSeek 默认思考模式不支持 function calling | `llm/deepseek.py` | `call_tool()` 增加 `extra_body={"thinking": {"type": "disabled"}}`（原 TODO 笔误写成 `deepseek-v4-flash`，该型号不存在，已修正） |
+| 4 | DeepSeek 默认思考模式不支持 function calling | `llm/deepseek.py` | `call_tool()` 增加 `extra_body={"thinking": {"type": "disabled"}}`（实际 `.env` 配置 `DEEPSEEK_MODEL_CHAT=deepseek-v4-flash`，该参数已生效） |
 | 5 | aggregator SQL 中 `None` 参数类型无法被 asyncpg 推断 | `aggregator/aggregator.py` | `:period IS NULL` → `CAST(:period AS TEXT) IS NULL` |
 
 ---

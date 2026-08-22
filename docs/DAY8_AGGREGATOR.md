@@ -35,7 +35,7 @@ posts.questions
     ├─ backfill-embeddings → questions.embedding (1024 维 bge-m3)
     │
     └─ aggregate
-         ├─ SQL 查 (公司, 岗位, 季度) 桶内题目（按 quality_score 排序，top_n=100）
+         ├─ SQL 查 (公司, 岗位, 季度) 桶内题目（按 content_score 排序，top_n=100）
          ├─ 余弦聚类 dedup（threshold=0.92）→ 每簇代表题 + freq
          ├─ DeepSeek 总结 → markdown（4 章节）
          └─ upsert summaries 表
@@ -44,11 +44,12 @@ posts.questions
 ## 3. RAG 分桶细节
 
 **SQL 桶定义**：
-- post 必须 `extract_status='done'` 且 `quality_score >= MIN_QUALITY_SCORE (默认 30)`
+- post 必须 `extract_status='done'` 且 `content_score >= MIN_CONTENT_SCORE (默认 30)`
 - post 关联了指定 (company_id, position_id)
 - period 通过 `to_char(posted_at, 'YYYY"Q"Q')` 匹配；传 `--period` 不传走"全部"
 
-**Top-N 选择**：每桶最多 100 题，按 `quality_score DESC` 排（高分帖优先），保证 LLM 看到的是精华。
+**Top-N 选择**：每桶最多 100 题，按 `content_score DESC` 排（内容完整的帖子优先），保证 LLM 看到的是精华。
+历史季度摘要不使用当前日期的 freshness，避免同一季度的摘要因今天日期变化而漂移。
 
 **去重策略**：
 - 余弦相似度 ≥ 0.92 视为同义题
@@ -94,7 +95,7 @@ FROM questions;
 ## 6. 性能与成本
 
 - bge-m3 batch 64：CPU 约 200 题/分钟；GPU 远快
-- DeepSeek-V3：单桶 100 题输入约 3000-5000 tokens，输出 1500-2500 tokens
+- DeepSeek-V4：单桶 100 题输入约 3000-5000 tokens，输出 1500-2500 tokens
 - 单桶成本：约 0.005-0.010 元
 - 1 公司 5 岗位 4 季度 = 20 桶 ≈ 0.2 元
 - 100 公司常见 5-10 岗位 4 季度 ≈ 5-10 元跑全表

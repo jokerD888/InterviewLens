@@ -7,7 +7,7 @@ from interviewlens.aggregator.aggregator import _cluster_questions
 
 
 def _q(qid: int, content: str, score: int = 50, category: str | None = None) -> dict:
-    return {"id": qid, "content": content, "category": category, "quality_score": score}
+    return {"id": qid, "content": content, "category": category, "content_score": score}
 
 
 def test_cluster_collapses_near_duplicates() -> None:

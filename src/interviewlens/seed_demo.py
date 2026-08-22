@@ -197,7 +197,7 @@ async def seed_demo() -> dict:
             if existing is not None:
                 continue
             posted_at = NOW - timedelta(days=random.randint(15, 120))
-            quality_score = 50 + random.randint(10, 40)
+            content_score = 50 + random.randint(10, 20)
             post = Post(
                 source_url=url,
                 title=title,
@@ -206,7 +206,9 @@ async def seed_demo() -> dict:
                 fetched_at=NOW,
                 extract_status="done",
                 extract_version=1,
-                quality_score=quality_score,
+                content_score=content_score,
+                content_score_version=1,
+                content_scored_at=NOW,
             )
             session.add(post)
             await session.flush()

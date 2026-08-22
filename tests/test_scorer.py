@@ -1,9 +1,9 @@
-"""Tests for the four-component quality scorer (pure functions)."""
+"""Tests for stable content and dynamic freshness scoring (pure functions)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from interviewlens.scoring import score_extracted
+from interviewlens.scoring import score_content, score_extracted, score_freshness
 
 
 def _post(rounds: list[dict]) -> dict:
@@ -79,3 +79,20 @@ def test_naive_datetime_treated_as_utc() -> None:
     posted_naive = (NOW - timedelta(days=10)).replace(tzinfo=None)
     br = score_extracted(extracted, posted_at=posted_naive, now=NOW)
     assert br.recency == 30  # ≤ 3 months
+
+
+def test_content_score_is_independent_of_post_date() -> None:
+    extracted = _post([{"round_no": 1, "questions": [_q(answer="brief")]}])
+    content = score_content(extracted)
+    assert content.total == 14
+    assert content.as_dict() == {"quantity": 3, "answers": 4, "rounds": 7, "total": 14}
+
+
+def test_freshness_uses_explicit_reference_time() -> None:
+    posted = NOW - timedelta(days=300)
+    assert score_freshness(posted, as_of=NOW) == 15
+    assert score_freshness(posted, as_of=NOW + timedelta(days=400)) == 8
+
+
+def test_unknown_post_date_has_no_freshness() -> None:
+    assert score_freshness(None, as_of=NOW) == 0
