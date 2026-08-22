@@ -1,65 +1,303 @@
 # InterviewLens
 
-> 自用面经聚合 AI 工具：抓取牛客大厂面经 → LLM 结构化抽取 → 公司/岗位归一 → 质量打分 → RAG 摘要
+InterviewLens 是一个面向个人秋招准备的面经知识库：把牛客等来源的非结构化面经抓取下来，抽取为公司、岗位、面试轮次和问题，统一实体名称，建立可检索的数据层，再生成公司 × 岗位 × 时间段的面试重点摘要。
+
+它不是一个通用爬虫或聊天机器人，而是一条“采集 → 结构化 → 归一 → 检索 → 聚合”的数据管线。
+
+## 能做什么
+
+| 能力 | 当前实现 |
+|---|---|
+| 单篇面经处理 | Playwright 抓取、正文清洗、LLM 结构化抽取 |
+| 实体归一 | alias 字典 → embedding 相似度 → LLM 兜底，并将结果写回字典 |
+| 内容评分 | `content_score` 衡量题量、答案完整度和面试轮次，范围 0～70 |
+| 动态推荐 | 根据原始发布时间 `posted_at` 计算 freshness，推荐场景使用 `ranking_score` |
+| 语义搜索 | 题目级 embedding + PostgreSQL pgvector/HNSW |
+| 面经聚合 | 按公司、岗位、季度或全部数据聚类去重，统计真实出现频次，再由 LLM 生成 Markdown 摘要 |
+| 批量处理 | Celery Worker、失败恢复、重试和 DLQ |
+| 可观测性 | Langfuse trace、Redis 缓存、Token 用量和节点耗时统计 |
+| 使用入口 | CLI、FastAPI REST API、Next.js Web 界面 |
+
+## 核心流程
+
+```text
+牛客面经 URL
+    │
+    ▼
+Crawler       Playwright 抓取原文
+    │
+    ▼
+Cleaner       去噪、提取正文、短文本过滤
+    │
+    ▼
+Extractor     DeepSeek Function Calling → 公司/岗位/轮次/问题
+    │
+    ▼
+Normalizer    alias_dict → embedding → LLM 兜底
+    │
+    ▼
+Scorer        计算稳定 content_score 并写入数据库
+    │
+    ├──────────────► pgvector 语义搜索
+    │
+    └──────────────► Aggregator 聚类去重 → LLM 摘要 → summaries
+```
+
+LangGraph 中是五个节点：`crawl → clean → extract → normalize → score`。Aggregator 和 Answerer 是图外的离线任务，不属于 LangGraph 主链。
+
+## 评分模型
+
+项目没有把“内容质量”和“时间新鲜度”永久混成一个数据库字段：
+
+```text
+content_score = quantity(30) + answers(20) + rounds(20)       # 稳定，持久化
+freshness_score = f(posted_at, as_of)                         # 动态，查询时计算
+ranking_score = content_score + freshness_score                # 只用于推荐排序
+```
+
+- `content_score` 用于 Aggregator 和 Answerer 的内容完整度门槛。
+- 时间线按照 `posted_at` 排序。
+- 推荐列表才使用 `content_score + freshness_score`。
+- `fetched_at` 只表示系统抓取时间，不能替代原始发布时间 `posted_at`。
+- `quality_score` 仍保留为迁移兼容字段，新逻辑不再依赖它。
+
+## 技术栈
+
+- Python 3.13、uv、Typer
+- LangGraph、DeepSeek API、Pydantic、tenacity
+- Playwright、trafilatura
+- PostgreSQL 16、pgvector、pg_trgm
+- Redis、Celery
+- FastAPI、Next.js 15、TypeScript、Tailwind
+- Langfuse
+
+## 快速启动：Docker 全栈
+
+### 1. 准备配置
+
+```bash
+cp .env.example .env
+```
+
+至少填写：
+
+- `DEEPSEEK_API_KEY`
+- `NOWCODER_COOKIE`（需要抓取受限页面时）
+- Langfuse 的密钥（如果需要追踪）
+
+`.env` 不应提交到 Git。
+
+### 2. 启动服务
+
+```bash
+docker compose up -d --build
+```
+
+首次启动会创建 PostgreSQL、Redis、Langfuse、API、Celery Worker 和 Web 服务，并下载 Python/embedding 依赖，可能需要较长时间。
+
+### 3. 初始化和检查
+
+```bash
+docker compose exec api uv run il doctor
+docker compose exec api uv run il seed-aliases
+```
+
+如果只想立即查看界面，可以导入演示数据：
+
+```bash
+docker compose exec api uv run il seed-demo
+```
+
+访问地址：
+
+- Web：<http://localhost:3013>
+- API 文档：<http://localhost:8000/docs>
+- Langfuse：<http://localhost:3001>
+
+### 已有数据库的评分迁移
+
+`sql/001_init.sql` 只会在 PostgreSQL 数据卷首次创建时自动执行。已有数据库需要手动执行一次（下面两种导入方式二选一）：
+
+```bash
+# macOS / Linux
+docker compose exec -T postgres psql -U il -d interviewlens < sql/003_content_score.sql
+# PowerShell
+Get-Content sql/003_content_score.sql | docker compose exec -T postgres psql -U il -d interviewlens
+docker compose exec api uv run il rescore --all
+```
+
+迁移不会直接复制旧的 `quality_score`，因为旧分数可能已经包含时间衰减，无法无损还原为内容分。
+
+## 常用工作流
+
+### 处理单篇面经
+
+```bash
+# 全链路：抓取 → 清洗 → 抽取 → 归一 → 内容评分
+docker compose exec api uv run il graph "https://www.nowcoder.com/discuss/<id>"
+
+# 查看帖子和处理结果
+docker compose exec api uv run il show-post <post_id>
+```
+
+需要分步调试时，可以分别使用：
+
+```bash
+docker compose exec api uv run il crawl "<url>"
+docker compose exec api uv run il extract <post_id>
+docker compose exec api uv run il normalize "字节" --type company
+```
+
+### 批量采集和恢复
+
+```bash
+# 从列表页抓取，并把帖子写入数据库
+docker compose exec api uv run il tab-crawl --pages 2 --save-db
+
+# 让 LangGraph 处理刚写入的 pending 帖子
+docker compose exec api uv run il resume
+
+# 查看或处理死信队列
+docker compose exec api uv run il dlq list
+docker compose exec api uv run il dlq drain --limit 50
+```
+
+如果需要 Celery 后台处理单个 URL，可以调用 `POST /admin/ingest`；批量任务和 DLQ 由 Worker 执行。
+
+### 向量搜索和聚合摘要
+
+```bash
+# 给题目生成 embedding
+docker compose exec api uv run il backfill-embeddings
+
+# 聚合一个公司/岗位/季度
+docker compose exec api uv run il aggregate \
+  --company 字节跳动 --position 后端开发 --period 2025Q2
+
+# 聚合全部有数据的公司/岗位组合
+docker compose exec api uv run il aggregate
+
+# 查看摘要
+docker compose exec api uv run il show-summary 字节跳动 后端开发 --period 2025Q2
+```
+
+### 内容分与推荐
+
+```bash
+# 从 questions 表重算稳定内容分，不调用 LLM
+docker compose exec api uv run il rescore --all
+
+# 推荐列表：content_score + 动态 freshness
+docker compose exec api uv run il top-posts --limit 20
+
+# Aggregator/Answerer 的内容分门槛，两个参数名都兼容
+docker compose exec api uv run il aggregate --min-content-score 30
+docker compose exec api uv run il answer --min-content-score 30
+```
+
+日常增量更新也可以直接使用：
+
+```bash
+docker compose exec api uv run il daily-update
+```
+
+## REST API
+
+主要接口如下，完整定义可直接查看 `/docs`：
+
+| 接口 | 用途 |
+|---|---|
+| `GET /companies` | 公司列表 |
+| `GET /companies/{id}/positions` | 公司下的岗位统计 |
+| `GET /positions` | 岗位列表 |
+| `GET /posts` | 按发布时间排序的面经 Feed |
+| `GET /posts/{id}` | 面经详情及评分信息 |
+| `GET /posts/search?q=...` | 题目级语义搜索 |
+| `GET /summaries` | 已生成摘要列表 |
+| `GET /summaries/{company}/{position}` | 查看公司/岗位摘要 |
+| `GET /summaries/{company}/{position}/questions` | 查看原始问题 |
+| `GET /admin/health` | PostgreSQL、Redis、pgvector 健康检查 |
+| `GET /admin/jobs` | Celery 队列、Worker 和 DLQ 状态 |
+| `GET /admin/metrics` | 缓存、Token、节点耗时统计 |
+| `POST /admin/ingest` | 将单个 URL 放入 Celery 队列 |
+
+## 数据模型
+
+核心表：
+
+- `posts`：原始面经、发布时间、抓取时间、抽取状态和稳定内容分。
+- `questions`：面试问题、答案要点、AI 答案和题目 embedding。
+- `companies` / `positions`：规范化公司和岗位。
+- `post_company_position`：面经与公司/岗位的关联。
+- `alias_dict`：实体别名到 canonical 的复用映射。
+- `summaries`：Aggregator 生成的预计算摘要。
+
+向量和关系数据都放在 PostgreSQL 中，搜索时可以同时做实体过滤和向量相似度查询，避免额外维护一套向量数据库。
+
+## 目录结构
+
+```text
+src/interviewlens/
+├── agent/          # LangGraph 状态和五个节点
+├── crawler/        # 单篇、列表和增量抓取
+├── normalizer/     # alias/embedding/LLM 实体归一
+├── scoring/        # content_score、freshness 和 ranking 计算
+├── aggregator/     # embedding 聚类去重和 LLM 摘要
+├── answerer/       # 离线生成题目 AI 答案
+├── api/            # FastAPI 路由和响应模型
+├── db/             # SQLModel 模型、Session 和 Repository
+└── tasks/          # Celery 任务和每日更新流程
+
+sql/
+├── 001_init.sql             # 初始 schema
+├── 002_answer_ai.sql        # AI 答案字段
+└── 003_content_score.sql    # 内容分迁移
+
+web/                         # Next.js 前端
+tests/                       # 单元测试和行为测试
+docs/                        # 架构、命令和各模块设计文档
+```
+
+## 本地开发
+
+安装 Python 依赖后：
+
+```bash
+uv sync
+uv run playwright install chromium
+uv run pytest
+uv run ruff check src tests
+```
+
+开发环境可以使用热重载配置：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+常用命令和排障步骤见 [docs/COMMANDS.md](docs/COMMANDS.md)。
 
 ## 文档导航
 
-| 文档 | 内容 |
-|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 完整架构、数据模型、Agent 设计、API、部署 |
-| [docs/PROMPT_LIBRARY.md](docs/PROMPT_LIBRARY.md) | 所有 LLM prompt 与版本管理规则 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 14 天 MVP day-by-day 排期 |
-| [docs/DAY1_BOOTSTRAP.md](docs/DAY1_BOOTSTRAP.md) | Day 1 一步步把骨架跑起来 |
-| [docs/DAY2_CRAWLER.md](docs/DAY2_CRAWLER.md) | Day 2 抓取与清洗使用指南 |
-| [docs/DAY3_EXTRACTOR.md](docs/DAY3_EXTRACTOR.md) | Day 3 LLM 结构化抽取使用指南 |
-| [docs/DAY4_LANGGRAPH.md](docs/DAY4_LANGGRAPH.md) | Day 4 LangGraph 状态机 + 断点续跑 |
-| [docs/DAY5_OBSERVABILITY.md](docs/DAY5_OBSERVABILITY.md) | Day 5 节点级 Langfuse trace + 缓存命中率 + 成本统计 |
-| [docs/DAY6_NORMALIZER.md](docs/DAY6_NORMALIZER.md) | Day 6 三级归一（字典→embedding→LLM）+ 自学习 |
-| [docs/DAY7_SCORER.md](docs/DAY7_SCORER.md) | Day 7 内容评分 + 动态时效推荐 |
-| [docs/DAY8_AGGREGATOR.md](docs/DAY8_AGGREGATOR.md) | Day 8 RAG 分桶摘要 + embedding 回填（闭环！） |
-| [docs/DAY9_CELERY.md](docs/DAY9_CELERY.md) | Day 9 Celery 批量化 + 列表页爬虫 + 死信队列 |
-| [docs/DAY10_API.md](docs/DAY10_API.md) | Day 10 FastAPI REST 接口（含语义搜索 + 任务面板） |
-| [docs/DAY11_FRONTEND.md](docs/DAY11_FRONTEND.md) | Day 11 Next.js 前端骨架（三栏 + 搜索 + 管理） |
-| [docs/DAY12_POLISH.md](docs/DAY12_POLISH.md) | Day 12 数据填充 + SSR + URL 状态化 + 性能 bench |
-| [docs/DAY13_INGESTION_TUNING.md](docs/DAY13_INGESTION_TUNING.md) | Day 13 真实数据填充 + Prompt A/B + Scorer 调优 |
-| [docs/DAY14_RESUME_AND_RELEASE.md](docs/DAY14_RESUME_AND_RELEASE.md) | Day 14 简历化收尾 + 演示 GIF + tag v0.1.0 + 部署 |
-| [web/README.md](web/README.md) | 前端独立 README |
+- [架构与数据模型](docs/ARCHITECTURE.md)
+- [命令参考](docs/COMMANDS.md)
+- [Crawler 演进](docs/CRAWLER_EVOLUTION.md)
+- [LLM 抽取可靠性](docs/LLM_EXTRACTION_RELIABILITY.md)
+- [实体归一](docs/DAY6_NORMALIZER.md)
+- [评分与动态时效](docs/DAY7_SCORER.md)
+- [Aggregator 摘要](docs/DAY8_AGGREGATOR.md)
+- [FastAPI 接口](docs/DAY10_API.md)
+- [前端说明](docs/DAY11_FRONTEND.md)
+- [Prompt 库](docs/PROMPT_LIBRARY.md)
 
-## 快速开始（Day 1）
+## 当前边界
 
-```bash
-cp .env.example .env          # 填 DeepSeek key / 牛客 cookie / Langfuse secrets
-docker compose up -d          # postgres + redis + langfuse
-uv sync                       # 装依赖
-uv run playwright install chromium
-uv run il doctor              # 健康检查
-uv run il seed-aliases        # 灌入种子别名
-uv run pytest                 # 跑冒烟测试
-```
+- 这是个人/小规模使用的工具，没有登录鉴权和多租户设计。
+- 抓取依赖目标站点页面结构、访问权限和 Cookie，站点改版可能导致解析失败。
+- LLM 抽取、摘要和本地 embedding 都有时间、算力或 API 成本。
+- 当前仓库没有真实大规模压测数据，不对百万级数据量或固定 P95 延迟作承诺。
+- 抓取内容仅用于个人学习和检索，必须遵守目标网站服务条款与适用法律，不要把原始面经再次公开发布。
 
-详细步骤见 [docs/DAY1_BOOTSTRAP.md](docs/DAY1_BOOTSTRAP.md)。
+## License
 
-## 技术栈速览
-
-Python 3.13 · uv · Playwright · LangGraph · DeepSeek-V4 · bge-m3 · PostgreSQL 16 + pgvector · Redis · Celery · Langfuse · FastAPI · Next.js 15 · shadcn/ui
-
-## 法律红线
-
-仅供个人/小圈子使用。**严禁将抓取内容二次发布到任何公开站点。** Cookie 写入 `.env`，不得提交 git。
-
-## 状态
-
-- ✅ Day 1：骨架（容器、SQL、ORM、CLI 三件套）
-- ✅ Day 2：抓取与清洗（Playwright + trafilatura + `il crawl` / `il show-post`）
-- ✅ Day 3：LLM 结构化抽取（DeepSeek Function Calling + Redis 缓存 + Langfuse trace + `il extract` / `il run-pipeline`）
-- ✅ Day 4：LangGraph 状态机串联三节点 + 断点续跑（`il graph` / `il resume`）
-- ✅ Day 5：节点级 Langfuse trace + 缓存/token 仪表（`il metrics` / `il metrics-reset`）
-- ✅ Day 6：Normalizer 节点 — 三级归一 + 自学习字典（`il normalize` / `il aliases`）
-- ✅ Day 7：Scorer 节点 — 稳定内容分 + 动态时效推荐（`il rescore` / `il top-posts`）
-- ✅ Day 8：Aggregator + embedding 回填（`il backfill-embeddings` / `il aggregate` / `il show-summary`）— **核心闭环完成**
-- ✅ Day 9：Celery 批量化 + 列表页爬虫 + 死信队列（`il batch` / `il dlq` / `il task-status`）
-- ✅ Day 10：FastAPI REST 接口（`il serve` + `/companies` `/posts/search` `/summaries` `/admin/*`）
-- ✅ Day 11：Next.js 前端骨架（`/`三栏 + `/search` 语义搜索 + `/admin` 任务面板）
-- ✅ Day 12：SSR 首屏 + URL 状态化 + `il seed-demo` + `il bench-search`
-- 📝 Day 13（文档已就绪）：真实数据填充 + Prompt A/B + Scorer 调优
-- 📝 Day 14（文档已就绪）：简历化收尾 + 演示 GIF + tag v0.1.0 + 部署
+MIT
