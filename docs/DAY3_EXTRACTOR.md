@@ -19,7 +19,7 @@ uv run il extract 1 --no-cache
 ```
 
 输出三段：
-1. **元数据表**：companies / positions / level / interview_date / rounds 数 / questions 插入数 / cache_hit / token 消耗 / model
+1. **抽取元数据**：companies / positions / 招聘层级（level）/ interview_date / rounds 数 / questions 插入数 / cache_hit / token 消耗 / model
 2. **每轮一个 Panel**：列出该轮所有题目，按 `[分类] 题目` 格式
 
 ## 2. 端到端管线（D2 + D3 一气呵成）

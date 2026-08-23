@@ -32,7 +32,6 @@ class Position(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     canonical: str = Field(unique=True, index=True)
     category: str | None = None
-    level: str | None = None
     embedding: Any | None = Field(
         default=None,
         sa_column=Column(Vector(1024), nullable=True),

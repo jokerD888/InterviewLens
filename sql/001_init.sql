@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS positions (
     id          BIGSERIAL PRIMARY KEY,
     canonical   TEXT NOT NULL UNIQUE,
     category    TEXT,
-    level       TEXT,
     embedding   vector(1024),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -99,7 +99,6 @@ CREATE TABLE positions (
     id           BIGSERIAL PRIMARY KEY,
     canonical    TEXT NOT NULL UNIQUE,         -- "后端开发"
     category     TEXT,                          -- 后端/前端/算法/测试...
-    level        TEXT,                          -- 实习/校招/社招
     embedding    vector(1024),                  -- canonical 名称向量
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
@@ -223,6 +222,8 @@ class PipelineState(TypedDict):
 | **Normalizer** | `extracted` | `normalized` ids | 查实体别名表 → pgvector Top-K → miss 调 LLM → 写回对应别名表 |
 | **Scorer** | `extracted` | `content_score` | 写稳定内容分；freshness 在查询时根据 `posted_at` 动态计算 |
 | **Aggregator** | （离线触发） | `summaries.content_md` | 按 (c,p,period) 分桶后跑 |
+
+说明：抽取结果中的招聘层级 `ExtractedPost.level`（实习/校招/社招/未知）目前只在抽取结果和 CLI 展示中使用，未持久化到规范岗位表；`positions` 只表示岗位实体本身。
 
 ### 3.3 流水线时序
 
