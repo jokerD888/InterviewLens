@@ -121,7 +121,7 @@ async def list_positions(
         sql = """
         SELECT p.id, p.canonical, p.category, COUNT(DISTINCT pcp.post_id) AS n
         FROM positions p
-        LEFT JOIN post_company_position pcp ON p.position_id = p.id
+        LEFT JOIN post_company_position pcp ON pcp.position_id = p.id
         GROUP BY p.id, p.canonical, p.category
         ORDER BY n DESC, p.canonical
         LIMIT :limit OFFSET :offset

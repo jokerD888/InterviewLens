@@ -111,7 +111,7 @@ FROM questions;
 - **Aggregator 不进 LangGraph**：它是定时批处理，不是单 URL 实时处理；分离让 graph 保持精简
 - **embedding 回填独立命令**：questions 表写入时不阻塞回填，graph 跑完立刻可用，回填延后做
 - **dedup 用 embedding 而非字符串相似度**：「Redis 分布式锁」和「Redis 实现分布式锁的方案」字符串差很多，但向量空间近，能正确合并
-- **freq 进 prompt 喂给 LLM**：不让 LLM 从 100 道题里"猜"哪些是高频，直接给频率，LLM 只负责措辞和分组
+- **freq 进 prompt 喂给 LLM**：不让 LLM 从全量题目里“猜”哪些是高频，代码先统计真实频次，LLM 只负责措辞和分组
 - **upsert summaries**：(c, p, period) 是 unique 索引，重跑覆盖，不堆历史
 - **质量分门槛**：min_quality=30 过滤水帖噪声，避免摘要被"我感觉良好"这种空话污染
 - **period 可选**：不传时聚合"全时间"，适合冷启动数据稀疏期

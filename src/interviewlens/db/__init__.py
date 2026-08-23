@@ -16,6 +16,7 @@ from .repositories import (
     replace_questions,
     set_cleaned_text,
     set_content_score,
+    set_interview_date,
     set_quality_score,
     upsert_raw_post,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "session_scope",
     "set_cleaned_text",
     "set_content_score",
+    "set_interview_date",
     "set_quality_score",
     "upsert_raw_post",
 ]

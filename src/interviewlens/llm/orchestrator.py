@@ -12,6 +12,7 @@ from ..db import (
     mark_extract_status,
     replace_questions,
     session_scope,
+    set_interview_date,
 )
 from .extractor import extract_from_text
 from .prompts import get_extractor_prompt_version
@@ -76,6 +77,7 @@ async def extract_post(post_id: int, *, use_cache: bool = True) -> ExtractOutcom
 
     async with session_scope() as session:
         inserted = await replace_questions(session, post_id, rounds_json)
+        await set_interview_date(session, post_id, parsed.interview_date)
         await mark_extract_status(
             session,
             post_id,

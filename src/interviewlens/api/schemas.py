@@ -1,7 +1,7 @@
 """Pydantic response schemas for the public API."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,7 @@ class PostBrief(BaseModel):
     title: str | None = None
     source_url: str
     posted_at: datetime | None = None
+    interview_date: date | None = None
     content_score: int | None = None
     freshness_score: int | None = None
     ranking_score: int | None = None
@@ -137,6 +138,7 @@ class PostFeedItem(BaseModel):
     title: str | None = None
     source_url: str
     posted_at: datetime | None = None
+    interview_date: date | None = None
     content_score: int | None = None
     freshness_score: int | None = None
     ranking_score: int | None = None

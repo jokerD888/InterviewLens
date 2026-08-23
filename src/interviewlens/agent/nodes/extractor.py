@@ -6,7 +6,7 @@ from typing import Any
 
 import openai
 
-from ...db import mark_extract_status, session_scope
+from ...db import mark_extract_status, session_scope, set_interview_date
 from ...db.repositories import replace_questions
 from ...llm import extract_from_text, get_extractor_prompt_version
 from ...logging import log
@@ -65,6 +65,7 @@ async def run(
         rounds_json = [r.model_dump() for r in parsed.rounds]
         async with session_scope() as session:
             inserted = await replace_questions(session, post_id, rounds_json)
+            await set_interview_date(session, post_id, parsed.interview_date)
             await mark_extract_status(
                 session,
                 post_id,

@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS companies (
     canonical   TEXT NOT NULL UNIQUE,
     industry    TEXT,
     embedding   vector(1024),
+    embedding_model TEXT,
+    embedding_version INT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_companies_embedding
@@ -28,6 +30,8 @@ CREATE TABLE IF NOT EXISTS positions (
     canonical   TEXT NOT NULL UNIQUE,
     category    TEXT,
     embedding   vector(1024),
+    embedding_model TEXT,
+    embedding_version INT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_positions_embedding
@@ -44,6 +48,7 @@ CREATE TABLE IF NOT EXISTS posts (
     raw_html        TEXT,
     cleaned_text    TEXT,
     posted_at       TIMESTAMPTZ,
+    interview_date  DATE,
     fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     content_score   INT,
     content_score_version INT NOT NULL DEFAULT 1,
@@ -52,7 +57,11 @@ CREATE TABLE IF NOT EXISTS posts (
     quality_score   INT,
     extract_status  TEXT NOT NULL DEFAULT 'pending',
     extract_error   TEXT,
-    extract_version INT NOT NULL DEFAULT 0
+    extract_version INT NOT NULL DEFAULT 0,
+    CONSTRAINT ck_posts_content_score_range
+        CHECK (content_score IS NULL OR content_score BETWEEN 0 AND 70),
+    CONSTRAINT ck_posts_extract_status
+        CHECK (extract_status IN ('pending', 'done', 'failed', 'skipped'))
 );
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(extract_status);
 CREATE INDEX IF NOT EXISTS idx_posts_posted ON posts(posted_at DESC);
@@ -72,6 +81,8 @@ CREATE TABLE IF NOT EXISTS post_company_position (
 );
 CREATE INDEX IF NOT EXISTS idx_pcp_company ON post_company_position(company_id);
 CREATE INDEX IF NOT EXISTS idx_pcp_position ON post_company_position(position_id);
+CREATE INDEX IF NOT EXISTS idx_pcp_company_position_post
+    ON post_company_position(company_id, position_id, post_id);
 
 -- ----------------------------------------------------------------
 -- questions (search granularity)
@@ -84,8 +95,16 @@ CREATE TABLE IF NOT EXISTS questions (
     content      TEXT NOT NULL,
     category     TEXT,
     answer_brief TEXT,
+    answer_ai    TEXT,
+    answer_ai_version INT NOT NULL DEFAULT 0,
     embedding    vector(1024),
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    embedding_model TEXT,
+    embedding_version INT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_questions_round_no_positive
+        CHECK (round_no IS NULL OR round_no >= 1),
+    CONSTRAINT ck_questions_answer_ai_version_nonnegative
+        CHECK (answer_ai_version >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_questions_post ON questions(post_id);
 CREATE INDEX IF NOT EXISTS idx_questions_category ON questions(category);
@@ -105,10 +124,12 @@ CREATE TABLE IF NOT EXISTS summaries (
     sample_count INT NOT NULL DEFAULT 0,
     input_fingerprint TEXT,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (company_id, position_id, period)
+    UNIQUE (company_id, position_id, period),
+    CONSTRAINT ck_summaries_sample_count_nonnegative CHECK (sample_count >= 0),
+    CONSTRAINT ck_summaries_period_format CHECK (
+        period = 'all' OR period ~ '^[0-9]{4}Q[1-4]$'
+    )
 );
-CREATE INDEX IF NOT EXISTS idx_summaries_lookup
-    ON summaries(company_id, position_id, period);
 
 -- ----------------------------------------------------------------
 -- Entity-specific alias tables (self-learning)
@@ -119,7 +140,8 @@ CREATE TABLE IF NOT EXISTS company_aliases (
     company_id    BIGINT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     confidence    REAL NOT NULL DEFAULT 1.0,
     learned_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (alias)
+    UNIQUE (alias),
+    CONSTRAINT ck_company_alias_confidence CHECK (confidence BETWEEN 0 AND 1)
 );
 CREATE INDEX IF NOT EXISTS idx_company_alias_canonical ON company_aliases(company_id);
 
@@ -129,7 +151,8 @@ CREATE TABLE IF NOT EXISTS position_aliases (
     position_id   BIGINT NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
     confidence    REAL NOT NULL DEFAULT 1.0,
     learned_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (alias)
+    UNIQUE (alias),
+    CONSTRAINT ck_position_alias_confidence CHECK (confidence BETWEEN 0 AND 1)
 );
 CREATE INDEX IF NOT EXISTS idx_position_alias_canonical ON position_aliases(position_id);
 

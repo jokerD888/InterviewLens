@@ -15,7 +15,7 @@ from sqlmodel import select
 
 from ..config import settings
 from ..db import Post
-from ..embedding import embed_texts
+from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..logging import log
 from ..observability import get_redis, incr_cache
 from ..scoring import FRESHNESS_POLICY_VERSION, freshness_case_sql, ranking_score, score_freshness
@@ -33,8 +33,8 @@ def _sha(s: str) -> str:
 
 
 def _emb_version() -> str:
-    """Stable version tag from the embedding model id; bump invalidates keys."""
-    return _sha(settings.embedding_model)[:16]
+    """Stable tag from model id and contract version; bump invalidates keys."""
+    return _sha(f"{settings.embedding_model}:v{EMBEDDING_VERSION}")[:16]
 
 
 def _embed_key(q: str) -> str:
@@ -152,12 +152,18 @@ async def search(
         return []
     vec_str = "[" + ",".join(f"{v:.6f}" for v in qvec[0].tolist()) + "]"
 
-    clauses = ["q.embedding IS NOT NULL"]
+    clauses = [
+        "q.embedding IS NOT NULL",
+        "q.embedding_model = :embedding_model",
+        "q.embedding_version = :embedding_version",
+    ]
     params: dict[str, object] = {
         "limit": limit,
         "vec": vec_str,
         "min_q": min_quality,
         "as_of": datetime.now(timezone.utc),
+        "embedding_model": settings.embedding_model,
+        "embedding_version": EMBEDDING_VERSION,
     }
     joins = "JOIN posts po ON po.id = q.post_id"
     if company:
@@ -228,6 +234,7 @@ async def get_post(
         title=post.title,
         source_url=post.source_url,
         posted_at=post.posted_at,
+        interview_date=post.interview_date,
         content_score=post.content_score,
         freshness_score=freshness,
         ranking_score=ranking_score(

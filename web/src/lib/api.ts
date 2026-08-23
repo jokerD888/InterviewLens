@@ -49,6 +49,7 @@ export type PostBrief = {
   title: string | null;
   source_url: string;
   posted_at: string | null;
+  interview_date: string | null;
   quality_score: number | null;
   companies: string[];
   positions: string[];
@@ -127,6 +128,7 @@ export type PostFeedItem = {
   title: string | null;
   source_url: string;
   posted_at: string | null;
+  interview_date: string | null;
   companies: string[];
   positions: string[];
   cleaned_text: string | null;

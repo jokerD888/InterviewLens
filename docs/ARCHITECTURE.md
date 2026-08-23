@@ -89,6 +89,8 @@ CREATE TABLE companies (
     canonical    TEXT NOT NULL UNIQUE,         -- 规范名: "字节跳动"
     industry     TEXT,                          -- 互联网/金融/...
     embedding    vector(1024),                  -- canonical 名称向量
+    embedding_model TEXT,
+    embedding_version INT,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_companies_embedding ON companies
@@ -100,6 +102,8 @@ CREATE TABLE positions (
     canonical    TEXT NOT NULL UNIQUE,         -- "后端开发"
     category     TEXT,                          -- 后端/前端/算法/测试...
     embedding    vector(1024),                  -- canonical 名称向量
+    embedding_model TEXT,
+    embedding_version INT,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_positions_embedding ON positions
@@ -113,12 +117,13 @@ CREATE TABLE posts (
     raw_html        TEXT,                       -- 原始 HTML（断点重抽用）
     cleaned_text    TEXT,                       -- trafilatura 清洗后
     posted_at       TIMESTAMPTZ,                -- 牛客上的发布时间
+    interview_date  DATE,                       -- 抽取的面试月份，保存为当月 1 号
     fetched_at      TIMESTAMPTZ DEFAULT NOW(),
     content_score   INT,                        -- 0-70，稳定内容完整度
     content_score_version INT DEFAULT 1,
     content_scored_at TIMESTAMPTZ,
     quality_score   INT,                        -- 迁移兼容字段，不参与新逻辑
-    extract_status  TEXT DEFAULT 'pending',     -- pending/done/failed
+    extract_status  TEXT DEFAULT 'pending',     -- pending/done/failed/skipped
     extract_error   TEXT,
     extract_version INT DEFAULT 0               -- prompt 版本，重抽时 +1
 );
@@ -141,7 +146,11 @@ CREATE TABLE questions (
     content      TEXT NOT NULL,
     category     TEXT,                          -- 算法/系统设计/八股/项目/HR
     answer_brief TEXT,                          -- 用户/原帖给的答案要点
+    answer_ai    TEXT,
+    answer_ai_version INT NOT NULL DEFAULT 0,
     embedding    vector(1024),                  -- bge-m3
+    embedding_model TEXT,
+    embedding_version INT,
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_questions_embedding ON questions
@@ -285,7 +294,9 @@ InterviewLens/
 │   ├── PROMPT_LIBRARY.md       # 所有 prompt 版本管理
 │   └── ROADMAP.md              # 14 天排期
 ├── sql/
-│   └── 001_init.sql            # 上述建表语句
+│   ├── 001_init.sql            # 初始 schema
+│   ├── 002-006_*.sql           # 历史增量迁移
+│   └── 007_database_integrity.sql # 当前完整性与向量元数据迁移
 ├── src/interviewlens/
 │   ├── __init__.py
 │   ├── config.py               # pydantic-settings

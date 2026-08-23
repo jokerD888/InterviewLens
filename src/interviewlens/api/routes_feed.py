@@ -53,7 +53,7 @@ async def feed(
 
     freshness = freshness_case_sql()
     sql = f"""
-    SELECT po.id, po.title, po.source_url, po.posted_at, po.cleaned_text,
+    SELECT po.id, po.title, po.source_url, po.posted_at, po.interview_date, po.cleaned_text,
            po.content_score,
            {freshness} AS freshness_score,
            CASE WHEN po.content_score IS NULL THEN NULL
@@ -108,6 +108,7 @@ async def feed(
             title=r["title"],
             source_url=r["source_url"],
             posted_at=r["posted_at"],
+            interview_date=r["interview_date"],
             content_score=r["content_score"],
             freshness_score=r["freshness_score"],
             ranking_score=r["ranking_score"],

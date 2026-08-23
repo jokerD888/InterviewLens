@@ -62,12 +62,14 @@ class _FakeSession:
     """Records execute calls; returns configurable results."""
     def __init__(self):
         self.calls = 0
+        self.statements = []
         self.rows = []           # for .all()
         self.scalars_rows = []   # for .scalars().all()
         self.first_row = None
         self.mappings_rows = []
     async def execute(self, stmt, params=None):
         self.calls += 1
+        self.statements.append(str(stmt))
         return _Result(
             rows=self.rows, scalars_rows=self.scalars_rows,
             first_row=self.first_row, mappings_rows=self.mappings_rows,
@@ -127,6 +129,20 @@ async def test_companies_redis_failure_miss_through(monkeypatch):
     out = await tax.list_companies(limit=100, offset=0, with_counts=True, session=session)
 
     assert len(out) == 1   # fell through to DB, no exception
+
+
+@pytest.mark.asyncio
+async def test_positions_count_query_joins_on_pcp_position_id(monkeypatch):
+    fake = _FakeRedis()
+    _patch(monkeypatch, fake)
+    session = _FakeSession()
+    session.rows = [(3, "后端", "技术岗", 4)]
+
+    out = await tax.list_positions(with_counts=True, session=session)
+
+    assert len(out) == 1
+    assert session.calls == 1
+    assert "pcp.position_id = p.id" in session.statements[0]
 
 
 # ----------------------------------------------------------- /companies/{id}/positions

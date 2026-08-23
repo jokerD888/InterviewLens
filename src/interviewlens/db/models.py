@@ -1,7 +1,7 @@
 """SQLModel ORM definitions, mirrored against the SQL migrations."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -23,6 +23,8 @@ class Company(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(1024), nullable=True),
     )
+    embedding_model: str | None = None
+    embedding_version: int | None = None
     created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
@@ -36,6 +38,8 @@ class Position(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(1024), nullable=True),
     )
+    embedding_model: str | None = None
+    embedding_version: int | None = None
     created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 
@@ -48,6 +52,8 @@ class Post(SQLModel, table=True):
     raw_html: str | None = None
     cleaned_text: str | None = None
     posted_at: datetime | None = None
+    # Extractor only returns YYYY-MM today; persisted as the first day of month.
+    interview_date: date | None = None
     fetched_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
     # Stable, time-independent score used for content-quality gates.
     content_score: int | None = Field(default=None, index=True)
@@ -85,6 +91,8 @@ class Question(SQLModel, table=True):
         default=None,
         sa_column=Column(Vector(1024), nullable=True),
     )
+    embedding_model: str | None = None
+    embedding_version: int | None = None
     created_at: datetime = Field(default_factory=_now, sa_column_kwargs={"server_default": func.now()})
 
 

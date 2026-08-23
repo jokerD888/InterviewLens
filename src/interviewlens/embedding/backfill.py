@@ -1,19 +1,20 @@
 """Backfill embeddings for questions and canonical entity tables.
 
 Each question's content is encoded with bge-m3 and written to
-``questions.embedding``. Idempotent: rows with non-null embedding are skipped
-unless ``force=True``.
+``questions.embedding``. Rows are skipped only when their vector already uses
+the current model/version; ``force=True`` recomputes everything.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlmodel import select
 
+from ..config import settings
 from ..db import Company, Position, Question, session_scope
 from ..logging import log
-from .bge_m3 import embed_texts
+from .bge_m3 import EMBEDDING_VERSION, embed_texts
 
 
 @dataclass(slots=True)
@@ -47,7 +48,15 @@ async def backfill_embeddings(
     async with session_scope() as session:
         stmt = select(Question)
         if not force:
-            stmt = stmt.where(Question.embedding.is_(None))  # type: ignore[union-attr]
+            stmt = stmt.where(
+                or_(
+                    Question.embedding.is_(None),  # type: ignore[union-attr]
+                    Question.embedding_model.is_(None),
+                    Question.embedding_model != settings.embedding_model,
+                    Question.embedding_version.is_(None),
+                    Question.embedding_version != EMBEDDING_VERSION,
+                )
+            )
         stmt = stmt.order_by(Question.id)
         if limit is not None:
             stmt = stmt.limit(limit)
@@ -69,7 +78,11 @@ async def backfill_embeddings(
                 await session.execute(
                     update(Question)
                     .where(Question.id == q.id)
-                    .values(embedding=v.tolist())
+                    .values(
+                        embedding=v.tolist(),
+                        embedding_model=settings.embedding_model,
+                        embedding_version=EMBEDDING_VERSION,
+                    )
                 )
         stats.embedded += len(chunk)
         log.info("embed.backfill_progress", done=stats.embedded, total=stats.scanned)
@@ -106,7 +119,15 @@ async def backfill_canonical_embeddings(
         async with session_scope() as session:
             stmt = select(Model)
             if not force:
-                stmt = stmt.where(Model.embedding.is_(None))  # type: ignore[union-attr]
+                stmt = stmt.where(
+                    or_(
+                        Model.embedding.is_(None),  # type: ignore[union-attr]
+                        Model.embedding_model.is_(None),
+                        Model.embedding_model != settings.embedding_model,
+                        Model.embedding_version.is_(None),
+                        Model.embedding_version != EMBEDDING_VERSION,
+                    )
+                )
             stmt = stmt.order_by(Model.id)
             if limit is not None:
                 remaining = max(limit - stats.scanned, 0)
@@ -132,7 +153,11 @@ async def backfill_canonical_embeddings(
                     await session.execute(
                         update(Model)
                         .where(Model.id == row.id)
-                        .values(embedding=vector.tolist())
+                        .values(
+                            embedding=vector.tolist(),
+                            embedding_model=settings.embedding_model,
+                            embedding_version=EMBEDDING_VERSION,
+                        )
                     )
             stats.embedded += len(chunk)
             log.info(

@@ -109,7 +109,7 @@ ORDER BY confidence ASC LIMIT 20;
 - **bge-m3 选型理由**：1024 维匹配 schema；中英混合最强；CPU 可跑（GPU 自动加速）；HuggingFace 直接下
 - **新建 canonical 同时写 alias**：成功抢占原始 alias 后，原始 alias 和 LLM 建议的新 canonical 名都进对应别名表；如果并发时主 alias 已被别人占用，则回读胜者，不扩散本次未采用的 canonical
 - **并发写回以数据库为准**：每张别名表的 `UNIQUE(alias)` 冲突后回读已保存的 canonical；tier 4 在同一事务中创建并抢占 alias，失败时清理本次新建的孤儿 canonical
-- **canonical 向量持久化**：迁移后运行 `il backfill-canonical-embeddings`，Normalizer 只编码查询 alias，候选 canonical 由 pgvector HNSW 索引返回；新增 canonical 会在创建时尝试写入 embedding，失败的行可再次回填
+- **canonical 向量持久化**：迁移后运行 `il backfill-canonical-embeddings`，Normalizer 只编码查询 alias，候选 canonical 由 pgvector HNSW 索引返回；新增 canonical 会在创建时尝试写入 embedding，失败的行可再次回填。每行同时记录 `embedding_model` / `embedding_version`，查询不会混用不同模型的向量
 - **LLM ID 先校验**：`canonical_id` 必须存在于当前 entity_type 对应的表，不能只相信模型返回值
 
 ## 7. 验收清单

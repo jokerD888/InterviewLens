@@ -4,6 +4,8 @@ Why bge-m3:
 - Best Chinese+English bilingual model in the public domain (2024-2025).
 - 1024-dim, matches our pgvector schema and HNSW index.
 - Auto-detects GPU (CUDA) with CPU fallback when EMBEDDING_DEVICE=auto.
+
+``EMBEDDING_VERSION`` increments whenever the embedding contract changes.
 """
 from __future__ import annotations
 
@@ -14,6 +16,8 @@ import numpy as np
 
 from ..config import settings
 from ..logging import log
+
+EMBEDDING_VERSION = 1
 
 _model = None
 _load_lock = asyncio.Lock()

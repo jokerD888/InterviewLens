@@ -31,7 +31,7 @@ from ..db import (
     Summary,
     session_scope,
 )
-from ..embedding import cosine_matrix, embed_texts
+from ..embedding import EMBEDDING_VERSION, cosine_matrix, embed_texts
 from ..errors import swallow
 from ..llm.aggregator_schema import AggregatorResult
 from ..llm.deepseek import get_client
@@ -147,6 +147,8 @@ async def _fetch_candidate_questions(
         JOIN bucket_posts bp ON bp.id = q.post_id
         JOIN posts p ON p.id = bp.id
         WHERE q.embedding IS NOT NULL
+          AND q.embedding_model = :embedding_model
+          AND q.embedding_version = :embedding_version
         {keyset_clause}
         ORDER BY bp.content_score DESC, q.id DESC
         LIMIT :page_size
@@ -157,6 +159,8 @@ async def _fetch_candidate_questions(
             "period": period,
             "min_q": min_quality,
             "page_size": limit,
+            "embedding_model": settings.embedding_model,
+            "embedding_version": EMBEDDING_VERSION,
         }
         if after_score is not None and after_id is not None:
             params.update({"after_score": after_score, "after_id": after_id})
@@ -338,6 +342,7 @@ def _build_input_fingerprint(
         "llm_max_clusters": llm_max_clusters,
         "chat_model": settings.deepseek_model_chat,
         "embedding_model": settings.embedding_model,
+        "embedding_version": EMBEDDING_VERSION,
         "questions": [
             {
                 "id": q.get("id"),

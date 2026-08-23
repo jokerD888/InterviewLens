@@ -1,9 +1,9 @@
 """Async repositories — thin functions over SQLModel ORM."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import delete, update
+from sqlalchemy import case, delete, func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -27,30 +27,37 @@ async def upsert_raw_post(
 
     Returns the Post row (already flushed, with id populated).
     """
-    existing = await get_post_by_url(session, url)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    if existing is None:
-        post = Post(
-            source_url=url,
-            title=title,
-            raw_html=raw_html,
-            fetched_at=now,
-            extract_status="pending",
-            extract_version=0,
-        )
-        session.add(post)
-        await session.flush()
-        return post
-
-    existing.raw_html = raw_html
-    existing.title = title or existing.title
-    existing.fetched_at = now
-    # Only reset status for posts that weren't successfully extracted before
-    if existing.extract_status not in ("done",):
-        existing.extract_status = "pending"
-        existing.extract_error = None
-    await session.flush()
-    return existing
+    stmt = pg_insert(Post).values(
+        source_url=url,
+        title=title,
+        raw_html=raw_html,
+        fetched_at=now,
+        extract_status="pending",
+        extract_version=0,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["source_url"],
+        set_={
+            "title": func.coalesce(stmt.excluded.title, Post.title),
+            "raw_html": stmt.excluded.raw_html,
+            "fetched_at": stmt.excluded.fetched_at,
+            # Preserve successful extraction; retry incomplete/failed rows.
+            "extract_status": case(
+                (Post.extract_status == "done", Post.extract_status),
+                else_="pending",
+            ),
+            "extract_error": case(
+                (Post.extract_status == "done", Post.extract_error),
+                else_=None,
+            ),
+        },
+    ).returning(Post.id)
+    post_id = (await session.execute(stmt)).scalar_one()
+    post = await session.get(Post, post_id)
+    if post is None:  # pragma: no cover - RETURNING/PK invariant
+        raise RuntimeError(f"upserted post {post_id} could not be reloaded")
+    return post
 
 
 async def set_cleaned_text(session: AsyncSession, post_id: int, text: str) -> None:
@@ -78,6 +85,27 @@ async def mark_extract_status(
 async def set_quality_score(session: AsyncSession, post_id: int, score: int) -> None:
     await session.execute(
         update(Post).where(Post.id == post_id).values(quality_score=score)
+    )
+
+
+async def set_interview_date(
+    session: AsyncSession,
+    post_id: int,
+    value: str | None,
+) -> None:
+    """Persist ExtractedPost's YYYY-MM value as the first day of that month."""
+    interview_date: date | None = None
+    if value and len(value) == 7 and value[4] == "-":
+        try:
+            interview_date = date.fromisoformat(f"{value}-01")
+        except ValueError:
+            # ExtractedPost validation normally removes invalid values; keep
+            # this repository boundary defensive for direct callers.
+            interview_date = None
+    await session.execute(
+        update(Post)
+        .where(Post.id == post_id)
+        .values(interview_date=interview_date)
     )
 
 

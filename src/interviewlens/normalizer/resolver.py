@@ -17,8 +17,9 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
+from ..config import settings
 from ..db import Company, CompanyAlias, Position, PositionAlias, session_scope
-from ..embedding import embed_texts
+from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..llm.deepseek import call_tool
 from ..llm.prompts import NORMALIZE_FUNCTION_SCHEMA, build_normalizer_messages
 from ..logging import log
@@ -82,11 +83,23 @@ async def _search_canonicals(entity_type: str, alias: str) -> list[dict[str, flo
                1 - (embedding <=> CAST(:vec AS vector)) AS similarity
         FROM {table}
         WHERE embedding IS NOT NULL
+          AND embedding_model = :embedding_model
+          AND embedding_version = :embedding_version
         ORDER BY embedding <=> CAST(:vec AS vector)
         LIMIT :limit
     """
     async with session_scope() as session:
-        rows = (await session.execute(sa_text(sql), {"vec": vec_str, "limit": TOP_K})).all()
+        rows = (
+            await session.execute(
+                sa_text(sql),
+                {
+                    "vec": vec_str,
+                    "limit": TOP_K,
+                    "embedding_model": settings.embedding_model,
+                    "embedding_version": EMBEDDING_VERSION,
+                },
+            )
+        ).all()
     return [
         {
             "id": int(row[0]),
@@ -161,6 +174,8 @@ async def _get_or_create_canonical(
     values: dict[str, object] = {"canonical": name}
     if embedding is not None:
         values["embedding"] = embedding
+        values["embedding_model"] = settings.embedding_model
+        values["embedding_version"] = EMBEDDING_VERSION
     stmt = (
         pg_insert(Model)
         .values(**values)
@@ -174,8 +189,14 @@ async def _get_or_create_canonical(
     existing = (
         await session.execute(select(Model).where(Model.canonical == name))
     ).scalar_one()
-    if embedding is not None and existing.embedding is None:
+    if embedding is not None and (
+        existing.embedding is None
+        or existing.embedding_model != settings.embedding_model
+        or existing.embedding_version != EMBEDDING_VERSION
+    ):
         existing.embedding = embedding
+        existing.embedding_model = settings.embedding_model
+        existing.embedding_version = EMBEDDING_VERSION
     return int(existing.id), False
 
 
