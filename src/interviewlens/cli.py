@@ -838,8 +838,16 @@ def aggregate(
     company: str | None = typer.Option(None, help="Canonical company name; omit to aggregate all pairs"),
     position: str | None = typer.Option(None, help="Canonical position name; required when company is given"),
     period: str | None = typer.Option(None, help='e.g. "2025Q2"; omit for "all"'),
-    top_n: int = typer.Option(100),
+    top_n: int | None = typer.Option(
+        None,
+        help="Maximum candidate questions; omit to aggregate the full bucket",
+    ),
     min_content_score: int = typer.Option(30, "--min-content-score", "--min-quality"),
+    llm_max_clusters: int = typer.Option(
+        100,
+        "--llm-max-clusters",
+        help="Maximum representative clusters sent to the LLM",
+    ),
     no_write: bool = typer.Option(False, "--no-write", help="Print summary, don't persist"),
 ) -> None:
     """Run RAG-based summarisation per (company × position × period) bucket."""
@@ -853,6 +861,7 @@ def aggregate(
                 period=period,
                 top_n=top_n,
                 min_quality=min_content_score,
+                llm_max_clusters=llm_max_clusters,
                 write=not no_write,
             )
             meta = Table(title="aggregate one", show_header=False)
@@ -876,6 +885,7 @@ def aggregate(
             top_n=top_n,
             min_quality=min_content_score,
             period=period,
+            llm_max_clusters=llm_max_clusters,
             write=not no_write,
         )
         if not results:

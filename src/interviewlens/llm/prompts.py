@@ -187,11 +187,13 @@ def build_aggregator_messages(
     position: str,
     period: str,
     questions: list[dict],
+    sample_count: int | None = None,
 ) -> list[dict]:
     """Compose Aggregator messages — now requests JSON output.
 
     questions: list of {content, category, freq, content_score, source_url}
-    sorted by freq desc.
+    sorted by freq desc. ``sample_count`` is the full raw-question count when
+    only the top representative clusters are passed to the model.
     """
     lines = []
     for i, q in enumerate(questions, 1):
@@ -205,7 +207,8 @@ def build_aggregator_messages(
         f"公司：{company}\n"
         f"岗位：{position}\n"
         f"周期：{period}\n"
-        f"题目数：{len(questions)}\n\n"
+        f"原始题目数：{len(questions) if sample_count is None else sample_count}\n"
+        f"输入摘要的代表簇数：{len(questions)}\n\n"
         f"题目列表（按频次排序）：\n{questions_block}\n\n"
         "请输出 JSON，字段说明：\n"
         "- high_frequency_topics: 高频考点 Top 10，按频次降序\n"

@@ -51,7 +51,7 @@
 - **验收**：水帖 ≤ 30 分，硬核帖 ≥ 70 分
 
 ### Day 8 —— Aggregator
-- [ ] `agent/nodes/aggregator.py`：分桶 + pgvector top-100 召回 + DeepSeek 总结
+- [ ] `agent/nodes/aggregator.py`：分桶 + 全量分页读取 + NumPy/Union-Find 去重 + DeepSeek 总结
 - [x] `llm/aggregator_schema.py`：Pydantic 校验摘要结构，并校验题目引用来自输入
 - [x] 空/非法输出纠正重试；API/网络异常指数退避；失败不写入坏摘要
 - [ ] 写入 `summaries` 表

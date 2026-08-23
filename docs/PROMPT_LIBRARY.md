@@ -131,7 +131,7 @@
 
 ## 3. Aggregator Prompt（v1）
 
-**用途**：对某 (公司, 岗位, 季度) 桶内 top-100 题目做摘要。
+**用途**：对某 (公司, 岗位, 季度) 桶内按 embedding 去重后的代表簇做摘要。默认先统计全量题目，再把按 `freq` 排序的 Top-M 代表簇送入模型；M 由 `--llm-max-clusters` 控制。
 
 ```
 你是面试备考助手。基于以下 {n} 道{company}{position}的真实面试题（{period}），

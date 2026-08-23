@@ -35,8 +35,9 @@ posts.questions
     ├─ backfill-embeddings → questions.embedding (1024 维 bge-m3)
     │
     └─ aggregate
-         ├─ SQL 查 (公司, 岗位, 季度) 桶内题目（按 content_score 排序，top_n=100）
-         ├─ 余弦聚类 dedup（threshold=0.92）→ 每簇代表题 + freq
+         ├─ SQL 分页查桶内全部合格题目（top_n 仅作为显式上限）
+         ├─ NumPy 分块相似度 + 阈值建图 + Union-Find → 每簇稳定代表题 + 真实 freq
+         ├─ 按 freq 排序，只取 Top-M 代表簇交给 LLM（默认 M=100）
          ├─ DeepSeek 总结 → markdown（4 章节）
          └─ upsert summaries 表
 ```
@@ -48,13 +49,14 @@ posts.questions
 - post 关联了指定 (company_id, position_id)
 - period 通过 `to_char(posted_at, 'YYYY"Q"Q')` 匹配；传 `--period` 不传走"全部"
 
-**Top-N 选择**：每桶最多 100 题，按 `content_score DESC` 排（内容完整的帖子优先），保证 LLM 看到的是精华。
+**候选读取**：默认读取每桶全部合格题目，按 `content_score DESC, question.id DESC` 使用 keyset 分页，避免把一次 SQL 结果集全部压在数据库连接中。`top_n` 只有在需要限流时才显式设置；它会改变统计人口。
+**LLM 上限**：去重和 `freq` 统计完成后，按频次取前 `llm_max_clusters` 个代表簇（CLI 默认 100）送给 LLM；这个上限不改变 `sample_count`。
 历史季度摘要不使用当前日期的 freshness，避免同一季度的摘要因今天日期变化而漂移。
 
 **去重策略**：
-- 余弦相似度 ≥ 0.92 视为同义题
-- 贪心聚类：第一题为新簇心，后续题与已有簇心比，最高相似度若 ≥ 阈值则归簇
-- freq 计数表示"该题在桶里被多少次提到"，进 prompt 给 LLM 当频率信号
+- 余弦相似度 ≥ 0.92 视为一条边
+- 对全量题目分块计算相似度，边构成的图用 Union-Find 求连通分量；结果不依赖输入顺序，也能处理 A≈B、B≈C 的链式合并
+- 每个分量选择内容分最高、再用题目 ID 打破平局的稳定代表；`freq` 是该分量覆盖的原始题目数
 
 **摘要 prompt**（见 `llm/prompts.py:AGGREGATOR_SYSTEM`）：
 - 4 章节模板：高频考点 Top10 / 重点考察方向 / 易忽略偏门题 / 备考建议
@@ -121,7 +123,7 @@ FROM questions;
 - [ ] `il aggregate` 全跑，summaries 表新增/更新行
 - [ ] `il show-summary 字节跳动 后端开发` 看到 4 章节 markdown
 - [ ] markdown 中"高频考点"每条都有原题引用（> 引用块）
-- [ ] `pytest tests/test_aggregator_cluster.py -v` 全 4 个测试绿
+- [ ] `pytest tests/test_aggregator_cluster.py -v` 聚类单测全部通过（含顺序无关、跨 block 连通分量）
 
 ## 9. 整个 LangGraph 闭环到这里完整
 

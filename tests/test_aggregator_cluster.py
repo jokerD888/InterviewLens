@@ -1,4 +1,4 @@
-"""Tests for the dedup clustering helper (pure math, no I/O)."""
+"""Tests for full-bucket NumPy graph clustering (pure math, no I/O)."""
 from __future__ import annotations
 
 import numpy as np
@@ -52,3 +52,36 @@ def test_cluster_ranks_by_freq_then_score() -> None:
     # First cluster should have freq=2 (1 absorbing 3), second is q2 alone
     assert clusters[0].get("freq") == 2
     assert clusters[1].get("freq") == 1
+
+
+def test_cluster_is_order_independent_and_chooses_stable_representative() -> None:
+    qs = [_q(1, "low score representative", score=10), _q(2, "duplicate", score=80)]
+    e1 = np.array([1.0, 0.0], dtype=np.float32)
+    e2 = np.array([0.99, 0.01], dtype=np.float32)
+    e2 = e2 / np.linalg.norm(e2)
+
+    forward = _cluster_questions(qs, {1: e1, 2: e2}, threshold=0.9)
+    reverse = _cluster_questions(list(reversed(qs)), {1: e1, 2: e2}, threshold=0.9)
+
+    assert forward == reverse
+    assert forward[0]["id"] == 2
+    assert forward[0]["freq"] == 2
+
+
+def test_cluster_merges_edges_across_blocks() -> None:
+    qs = [_q(1, "a"), _q(2, "b"), _q(3, "c")]
+    e1 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    e2 = np.array([0.99, 0.01, 0.0], dtype=np.float32)
+    e2 = e2 / np.linalg.norm(e2)
+    e3 = np.array([0.98, 0.02, 0.0], dtype=np.float32)
+    e3 = e3 / np.linalg.norm(e3)
+
+    clusters = _cluster_questions(
+        qs,
+        {1: e1, 2: e2, 3: e3},
+        threshold=0.9,
+        block_size=1,
+    )
+
+    assert len(clusters) == 1
+    assert clusters[0]["freq"] == 3

@@ -68,7 +68,7 @@ URL → Crawler → Cleaner → Extractor → Normalizer → Scorer
 - **Extractor**: DeepSeek Function Calling with strict JSON schema → `ExtractedPost`. Redis-cached by `sha256(text) + prompt_version`.
 - **Normalizer**: Three-tier resolution — alias_dict lookup → bge-m3 cosine similarity (≥0.85 auto-match) → LLM tool call → create new canonical. Self-learns by writing back matches to alias_dict.
 - **Scorer**: Pure function, no I/O. `quantity(30) + answers(20) + rounds(20) + recency(30)` = 0–100.
-- **Aggregator** (offline): Groups questions by (company, position, period), retrieves top-100 via pgvector, generates markdown summary via DeepSeek.
+- **Aggregator** (offline): Groups questions by (company, position, period), reads the full eligible bucket in pages, performs blockwise NumPy cosine graph clustering + Union-Find, then sends the top representative clusters (default 100) to DeepSeek for a markdown summary. `top_n` is an explicit cap, not the default.
 
 ### Key modules
 

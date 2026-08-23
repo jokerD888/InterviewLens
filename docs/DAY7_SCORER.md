@@ -113,5 +113,5 @@ LIMIT 10;
 
 ## 8. 下一步（D8 预告）
 
-D8：Aggregator —— 按公司×岗位×季度分桶，跑 pgvector RAG 取 top-100 题目，
+D8：Aggregator —— 按公司×岗位×季度分桶，全量分页读取后做 NumPy/Union-Find 去重，再把 Top-M 代表簇交给 LLM，
 DeepSeek 总结成 markdown，写入 summaries 表。这之后整个 LangGraph 流程就完整了。

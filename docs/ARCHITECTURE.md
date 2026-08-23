@@ -245,7 +245,9 @@ URL 入队 → Celery worker
 
 定时任务（每天 03:00）：
   Aggregator 扫描有新数据的 (c,p,period) 桶
-  → pgvector 检索每桶 top-100 题目
+  → 分页读取桶内全部合格题目（可用 top_n 显式限流）
+  → NumPy 分块计算余弦相似度，阈值建图并用 Union-Find 去重
+  → 只把按真实频次排序的 Top-M 代表簇交给 DeepSeek
   → DeepSeek 总结成 markdown
   → 写 summaries
 ```

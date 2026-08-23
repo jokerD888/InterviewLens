@@ -42,7 +42,9 @@ from ..llm.prompts import (
 from ..logging import log
 from ..observability import incr_tokens
 
-DEFAULT_TOP_N = 100
+DEFAULT_TOP_N: int | None = None  # full-bucket statistics by default
+DEFAULT_PAGE_SIZE = 512
+DEFAULT_LLM_MAX_CLUSTERS = 100
 DUP_SIM_THRESHOLD = 0.92  # questions with cosine >= this collapse into one cluster
 MIN_CONTENT_SCORE = 30
 # Backward-compatible import/name for CLI callers; the threshold is now
@@ -50,7 +52,7 @@ MIN_CONTENT_SCORE = 30
 MIN_QUALITY_SCORE = MIN_CONTENT_SCORE
 MAX_OUTPUT_ATTEMPTS = 2  # initial generation + one corrective prompt
 MAX_TRANSPORT_ATTEMPTS = 3
-AGGREGATOR_FINGERPRINT_VERSION = 1
+AGGREGATOR_FINGERPRINT_VERSION = 2
 
 
 class AggregatorOutputError(RuntimeError):
@@ -95,74 +97,116 @@ async def _fetch_candidate_questions(
     *,
     company_id: int,
     position_id: int,
-    period: str,
-    top_n: int,
+    period: str | None,
+    top_n: int | None,
     min_quality: int,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> list[dict]:
-    """Pull candidate questions for a bucket. Falls back to "any time" when the
-    period filter starves the bucket."""
-    sql = """
-    WITH bucket_posts AS (
-        SELECT po.id, po.posted_at, po.content_score
-        FROM posts po
-        JOIN post_company_position pcp ON pcp.post_id = po.id
-        WHERE pcp.company_id = :c
-          AND pcp.position_id = :p
-          AND po.extract_status = 'done'
-          AND COALESCE(po.content_score, 0) >= :min_q
-          AND (
-              CAST(:period AS TEXT) IS NULL
-              OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
-          )
-    )
-    SELECT q.id, q.content, q.category, q.answer_brief, bp.content_score, p.source_url
-    FROM questions q
-    JOIN bucket_posts bp ON bp.id = q.post_id
-    JOIN posts p ON p.id = bp.id
-    WHERE q.embedding IS NOT NULL
-    ORDER BY bp.content_score DESC NULLS LAST, q.id DESC
-    LIMIT :top_n
+    """Read a bucket in stable pages, optionally applying an explicit cap.
+
+    ``top_n=None`` means all eligible questions.  Pagination controls the
+    database result size; it does not change the statistical population.
     """
-    params = {
-        "c": company_id,
-        "p": position_id,
-        "period": period,
-        "min_q": min_quality,
-        "top_n": top_n,
-    }
-    async with session_scope() as session:
-        rows = (await session.execute(sa_text(sql), params)).all()
-    return [
-        {
-            "id": r[0],
-            "content": r[1],
-            "category": r[2],
-            "answer_brief": r[3],
-            "content_score": r[4],
-            # Compatibility for prompt/tests written before the split.
-            "quality_score": r[4],
-            "source_url": r[5],
+    if page_size <= 0:
+        raise ValueError("page_size must be positive")
+    if top_n is not None and top_n <= 0:
+        return []
+
+    results: list[dict] = []
+    after_score: int | None = None
+    after_id: int | None = None
+    while top_n is None or len(results) < top_n:
+        remaining = None if top_n is None else top_n - len(results)
+        limit = page_size if remaining is None else min(page_size, remaining)
+        keyset_clause = ""
+        if after_score is not None and after_id is not None:
+            keyset_clause = """
+              AND (
+                  bp.content_score < :after_score
+                  OR (bp.content_score = :after_score AND q.id < :after_id)
+              )
+            """
+        sql = f"""
+        WITH bucket_posts AS (
+            SELECT po.id, po.posted_at,
+                   COALESCE(po.content_score, 0) AS content_score
+            FROM posts po
+            JOIN post_company_position pcp ON pcp.post_id = po.id
+            WHERE pcp.company_id = :c
+              AND pcp.position_id = :p
+              AND po.extract_status = 'done'
+              AND COALESCE(po.content_score, 0) >= :min_q
+              AND (
+                  CAST(:period AS TEXT) IS NULL
+                  OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
+              )
+        )
+        SELECT q.id, q.content, q.category, q.answer_brief,
+               bp.content_score, p.source_url
+        FROM questions q
+        JOIN bucket_posts bp ON bp.id = q.post_id
+        JOIN posts p ON p.id = bp.id
+        WHERE q.embedding IS NOT NULL
+        {keyset_clause}
+        ORDER BY bp.content_score DESC, q.id DESC
+        LIMIT :page_size
+        """
+        params = {
+            "c": company_id,
+            "p": position_id,
+            "period": period,
+            "min_q": min_quality,
+            "page_size": limit,
         }
-        for r in rows
-    ]
+        if after_score is not None and after_id is not None:
+            params.update({"after_score": after_score, "after_id": after_id})
+        async with session_scope() as session:
+            rows = (await session.execute(sa_text(sql), params)).all()
+        if not rows:
+            break
+        results.extend(
+            {
+                "id": r[0],
+                "content": r[1],
+                "category": r[2],
+                "answer_brief": r[3],
+                "content_score": r[4],
+                # Compatibility for prompt/tests written before the split.
+                "quality_score": r[4],
+                "source_url": r[5],
+            }
+            for r in rows
+        )
+        after_score = int(rows[-1][4] or 0)
+        after_id = int(rows[-1][0])
+        if len(rows) < limit:
+            break
+    return results
 
 
-async def _fetch_embeddings(question_ids: list[int]) -> dict[int, np.ndarray]:
+async def _fetch_embeddings(
+    question_ids: list[int],
+    *,
+    batch_size: int = DEFAULT_PAGE_SIZE,
+) -> dict[int, np.ndarray]:
     if not question_ids:
         return {}
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     sql = "SELECT id, embedding::text FROM questions WHERE id = ANY(:ids)"
-    async with session_scope() as session:
-        rows = (await session.execute(sa_text(sql), {"ids": question_ids})).all()
-
     out: dict[int, np.ndarray] = {}
-    for qid, vec_str in rows:
-        if vec_str is None:
-            continue
-        # pgvector text format: "[0.1,0.2,...]"
-        cleaned = vec_str.strip().strip("[]")
-        if not cleaned:
-            continue
-        out[qid] = np.fromstring(cleaned, sep=",", dtype=np.float32)
+    for start in range(0, len(question_ids), batch_size):
+        chunk = question_ids[start : start + batch_size]
+        async with session_scope() as session:
+            rows = (await session.execute(sa_text(sql), {"ids": chunk})).all()
+        for qid, vec_str in rows:
+            if vec_str is None:
+                continue
+            # pgvector text format: "[0.1,0.2,...]"
+            cleaned = vec_str.strip().strip("[]")
+            if not cleaned:
+                continue
+            out[qid] = np.fromstring(cleaned, sep=",", dtype=np.float32)
     return out
 
 
@@ -171,41 +215,94 @@ def _cluster_questions(
     embeddings: dict[int, np.ndarray],
     *,
     threshold: float,
+    block_size: int = 512,
 ) -> list[dict]:
-    """Greedy clustering by cosine similarity.
+    """Cluster a complete bucket with blockwise NumPy graph construction.
 
-    Returns one representative per cluster with a ``freq`` field counting how
-    many duplicates collapsed in.
+    Similarity edges are added for every pair at or above ``threshold`` and
+    Union-Find computes connected components.  This is order-independent and
+    gives each component's true frequency within the supplied population.
+    ``block_size`` bounds the temporary similarity matrix, while the overall
+    exact comparison remains O(n²d).
     """
+    if block_size <= 0:
+        raise ValueError("block_size must be positive")
+    n = len(questions)
+    if n == 0:
+        return []
+
+    parent = list(range(n))
+    sizes = [1] * n
+
+    def find(value: int) -> int:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = parent[value]
+        return value
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left == root_right:
+            return
+        if sizes[root_left] < sizes[root_right]:
+            root_left, root_right = root_right, root_left
+        parent[root_right] = root_left
+        sizes[root_left] += sizes[root_right]
+
+    valid_indices: list[int] = []
+    valid_vectors: list[np.ndarray] = []
+    for index, question in enumerate(questions):
+        vector = embeddings.get(question["id"])
+        if vector is None or vector.size == 0:
+            continue
+        if vector.ndim != 1:
+            raise ValueError(f"embedding for question {question['id']} is not 1-D")
+        if not np.isfinite(vector).all() or float(np.linalg.norm(vector)) <= 1e-12:
+            continue
+        valid_indices.append(index)
+        valid_vectors.append(np.asarray(vector, dtype=np.float32))
+
+    if valid_vectors:
+        matrix = np.stack(valid_vectors)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = matrix / norms
+        for start in range(0, len(valid_indices), block_size):
+            stop = min(start + block_size, len(valid_indices))
+            left = matrix[start:stop]
+            for other_start in range(start, len(valid_indices), block_size):
+                other_stop = min(other_start + block_size, len(valid_indices))
+                right = matrix[other_start:other_stop]
+                similarities = cosine_matrix(left, right)
+                pairs = np.argwhere(similarities >= threshold)
+                for left_offset, right_offset in pairs:
+                    left_pos = start + int(left_offset)
+                    right_pos = other_start + int(right_offset)
+                    if left_pos >= right_pos:
+                        continue
+                    union(valid_indices[left_pos], valid_indices[right_pos])
+
+    components: dict[int, list[int]] = {}
+    for index in range(n):
+        components.setdefault(find(index), []).append(index)
+
     clusters: list[dict] = []
-    centroids: list[np.ndarray] = []
-
-    for q in questions:
-        emb = embeddings.get(q["id"])
-        if emb is None or emb.size == 0:
-            # No embedding → treat as its own cluster.
-            clusters.append({**q, "freq": 1})
-            continue
-
-        if not centroids:
-            clusters.append({**q, "freq": 1})
-            centroids.append(emb)
-            continue
-
-        gallery = np.stack(centroids)
-        sims = cosine_matrix(emb[None, :], gallery)[0]
-        best = int(np.argmax(sims))
-        if sims[best] >= threshold:
-            clusters[best]["freq"] = clusters[best].get("freq", 1) + 1
-            continue
-
-        clusters.append({**q, "freq": 1})
-        centroids.append(emb)
+    for members in components.values():
+        representative = min(
+            members,
+            key=lambda index: (
+                -(questions[index].get("content_score", questions[index].get("quality_score")) or 0),
+                questions[index]["id"],
+            ),
+        )
+        cluster = {**questions[representative], "freq": len(members)}
+        clusters.append(cluster)
 
     clusters.sort(
         key=lambda x: (
             -x.get("freq", 1),
             -(x.get("content_score", x.get("quality_score")) or 0),
+            x.get("id", 0),
         )
     )
     return clusters
@@ -219,16 +316,18 @@ def _normalise_question_text(value: str) -> str:
 def _build_input_fingerprint(
     *,
     questions: list[dict],
-    period: str,
-    top_n: int,
+    period: str | None,
+    top_n: int | None,
     min_quality: int,
     dedup_threshold: float,
+    llm_max_clusters: int = DEFAULT_LLM_MAX_CLUSTERS,
 ) -> str:
     """Build a stable cache key for every input that affects a summary.
 
-    The list order is intentional: SQL selection order determines the top-N
-    boundary and the greedy clustering result.  The version must be bumped
-    when the aggregation algorithm, prompt, or embedding contract changes.
+    The list order is intentional: SQL selection order determines an explicit
+    ``top_n`` boundary.  With the default ``top_n=None`` the complete bucket
+    is part of the fingerprint.  The version must be bumped when the
+    aggregation algorithm, prompt, or embedding contract changes.
     """
     payload = {
         "fingerprint_version": AGGREGATOR_FINGERPRINT_VERSION,
@@ -236,6 +335,7 @@ def _build_input_fingerprint(
         "top_n": top_n,
         "min_quality": min_quality,
         "dedup_threshold": dedup_threshold,
+        "llm_max_clusters": llm_max_clusters,
         "chat_model": settings.deepseek_model_chat,
         "embedding_model": settings.embedding_model,
         "questions": [
@@ -364,6 +464,7 @@ async def _summarise(
     position: str,
     period: str,
     questions: list[dict],
+    sample_count: int | None = None,
     trace=None,
 ) -> tuple[str, dict | None]:
     """Generate validated structured JSON via DeepSeek, then render Markdown.
@@ -373,7 +474,11 @@ async def _summarise(
     prompt; raw model output is never persisted.
     """
     base_messages = build_aggregator_messages(
-        company=company, position=position, period=period, questions=questions
+        company=company,
+        position=position,
+        period=period,
+        questions=questions,
+        sample_count=len(questions) if sample_count is None else sample_count,
     )
     client = get_client()
     usage_total: dict | None = None
@@ -446,9 +551,10 @@ async def aggregate_one(
     company: str,
     position: str,
     period: str | None = None,
-    top_n: int = DEFAULT_TOP_N,
+    top_n: int | None = DEFAULT_TOP_N,
     min_quality: int = MIN_QUALITY_SCORE,
     dedup_threshold: float = DUP_SIM_THRESHOLD,
+    llm_max_clusters: int = DEFAULT_LLM_MAX_CLUSTERS,
     write: bool = True,
     trace=None,
 ) -> AggregateOutcome:
@@ -467,6 +573,8 @@ async def aggregate_one(
         )
 
     period_label = period or "all"
+    if llm_max_clusters <= 0:
+        raise ValueError("llm_max_clusters must be positive")
     log.info(
         "aggregate.start",
         company=company,
@@ -500,6 +608,7 @@ async def aggregate_one(
         top_n=top_n,
         min_quality=min_quality,
         dedup_threshold=dedup_threshold,
+        llm_max_clusters=llm_max_clusters,
     )
 
     # Skip only when the complete aggregation input and algorithm contract
@@ -537,17 +646,20 @@ async def aggregate_one(
 
     embeddings = await _fetch_embeddings([q["id"] for q in raw])
     clusters = _cluster_questions(raw, embeddings, threshold=dedup_threshold)
+    llm_questions = clusters[:llm_max_clusters]
     log.info(
         "aggregate.clustered",
         raw=len(raw),
         clusters=len(clusters),
+        llm_clusters=len(llm_questions),
     )
 
     summary_md, _usage = await _summarise(
         company=company,
         position=position,
         period=period_label,
-        questions=clusters,
+        questions=llm_questions,
+        sample_count=len(raw),
         trace=trace,
     )
 
@@ -594,9 +706,10 @@ async def aggregate_one(
 
 async def aggregate_all(
     *,
-    top_n: int = DEFAULT_TOP_N,
+    top_n: int | None = DEFAULT_TOP_N,
     min_quality: int = MIN_QUALITY_SCORE,
     period: str | None = None,
+    llm_max_clusters: int = DEFAULT_LLM_MAX_CLUSTERS,
     write: bool = True,
 ) -> list[AggregateOutcome]:
     """Find every (company, position) pair with data and run aggregate_one."""
@@ -624,6 +737,7 @@ async def aggregate_all(
                     period=period,
                     top_n=top_n,
                     min_quality=min_quality,
+                    llm_max_clusters=llm_max_clusters,
                     write=write,
                 )
             except (openai.APIError, SQLAlchemyError, asyncio.TimeoutError, RuntimeError):
