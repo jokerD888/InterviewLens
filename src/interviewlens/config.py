@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-large-zh-v1.5"
     embedding_device: str = "cpu"
     embedding_dim: int = 1024
+    inferpilot_server_url: str = "http://localhost:8000"
 
     # ---- Langfuse ----
     langfuse_host: str = "http://localhost:3001"

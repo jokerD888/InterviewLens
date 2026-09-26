@@ -80,6 +80,24 @@ async def embed_texts(texts: Iterable[str]) -> np.ndarray:
     if not items:
         return np.zeros((0, settings.embedding_dim), dtype=np.float32)
 
+    # 1. Try InferPilot High-Performance C++ Inference Engine
+    inferpilot_url = getattr(settings, "inferpilot_server_url", None)
+    if inferpilot_url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{inferpilot_url.rstrip('/')}/v1/embeddings",
+                    json={"model": settings.embedding_model, "input": items},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()["data"]
+                    embeddings = [item["embedding"] for item in data]
+                    return np.asarray(embeddings, dtype=np.float32)
+        except Exception as e:
+            log.warning("embed.inferpilot_fallback", error=str(e))
+
+    # 2. Local Fallback: PyTorch SentenceTransformer
     model = await get_model()
 
     def _do_encode():
