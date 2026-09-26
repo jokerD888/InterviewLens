@@ -17,10 +17,12 @@ import numpy as np
 from ..config import settings
 from ..logging import log
 
-EMBEDDING_VERSION = 1
+EMBEDDING_VERSION = 2
 
 _model = None
 _load_lock = asyncio.Lock()
+_tokenizer = None
+_tok_lock = asyncio.Lock()
 
 
 def _resolve_device() -> str:
@@ -74,26 +76,71 @@ async def get_model():
         return _model
 
 
+async def get_tokenizer():
+    """Lazy import transformers + load fast tokenizer (cached forever)."""
+    global _tokenizer
+    if _tokenizer is not None:
+        return _tokenizer
+    async with _tok_lock:
+        if _tokenizer is not None:
+            return _tokenizer
+        log.info("tokenizer.loading", model=settings.embedding_model)
+        from transformers import AutoTokenizer  # noqa: WPS433
+
+        def _do_load():
+            return AutoTokenizer.from_pretrained(settings.embedding_model)
+
+        _tokenizer = await asyncio.to_thread(_do_load)
+        log.info("tokenizer.loaded", model=settings.embedding_model)
+        return _tokenizer
+
+
 async def embed_texts(texts: Iterable[str]) -> np.ndarray:
     """Encode a list of texts → 2D numpy array (n, 1024), L2-normalised."""
     items = list(texts)
     if not items:
         return np.zeros((0, settings.embedding_dim), dtype=np.float32)
 
-    # 1. Try InferPilot High-Performance C++ Inference Engine
+    # 1. Try InferPilot High-Performance C++ Inference Engine (Fast Tokenizer + TensorRT)
     inferpilot_url = getattr(settings, "inferpilot_server_url", None)
     if inferpilot_url:
         try:
+            tokenizer = await get_tokenizer()
+            # Fast Rust Tokenizer executes in <0.5ms on CPU
+            encoded = tokenizer(items, padding=False, truncation=True, max_length=128)
+            token_ids_batch = encoded["input_ids"]
+
             import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # Strict, realistic timeouts: connect 0.5s, read 2.0s
+            timeout = httpx.Timeout(connect=0.5, read=2.0, write=1.0, pool=2.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     f"{inferpilot_url.rstrip('/')}/v1/embeddings",
-                    json={"model": settings.embedding_model, "input": items},
+                    json={"model": settings.embedding_model, "input_ids": token_ids_batch},
                 )
                 if resp.status_code == 200:
                     data = resp.json()["data"]
                     embeddings = [item["embedding"] for item in data]
-                    return np.asarray(embeddings, dtype=np.float32)
+                    arr = np.asarray(embeddings, dtype=np.float32)
+
+                    # Defensive validations: shape, finiteness, non-zero norm
+                    if arr.shape != (len(items), settings.embedding_dim):
+                        raise ValueError(
+                            f"InferPilot returned shape {arr.shape}, expected ({len(items)}, {settings.embedding_dim})"
+                        )
+                    if not np.all(np.isfinite(arr)):
+                        raise ValueError("InferPilot returned non-finite (NaN/Inf) values")
+                    norms = np.linalg.norm(arr, axis=1)
+                    if np.any(norms < 1e-4):
+                        raise ValueError("InferPilot returned zero or near-zero vectors")
+
+                    return arr
+                else:
+                    log.warning(
+                        "embed.inferpilot_http_error",
+                        status_code=resp.status_code,
+                        body=resp.text[:200],
+                    )
         except Exception as e:
             log.warning("embed.inferpilot_fallback", error=str(e))
 

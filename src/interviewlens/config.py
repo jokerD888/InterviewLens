@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     deepseek_model_reasoner: str = "deepseek-reasoner"
 
     # ---- Embedding ----
-    embedding_model: str = "BAAI/bge-large-zh-v1.5"
+    embedding_model: str = "BAAI/bge-m3"
     embedding_device: str = "cpu"
     embedding_dim: int = 1024
     inferpilot_server_url: str = "http://localhost:8000"
