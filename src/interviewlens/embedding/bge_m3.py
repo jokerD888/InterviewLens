@@ -95,56 +95,10 @@ async def get_tokenizer():
         return _tokenizer
 
 
-async def embed_texts(texts: Iterable[str]) -> np.ndarray:
-    """Encode a list of texts → 2D numpy array (n, 1024), L2-normalised."""
-    items = list(texts)
+async def _embed_batch_pytorch(items: list[str]) -> np.ndarray:
+    """Fallback embedding using PyTorch SentenceTransformer (handles arbitrarily long sequences)."""
     if not items:
         return np.zeros((0, settings.embedding_dim), dtype=np.float32)
-
-    # 1. Try InferPilot High-Performance C++ Inference Engine (Fast Tokenizer + TensorRT)
-    inferpilot_url = getattr(settings, "inferpilot_server_url", None)
-    if inferpilot_url:
-        try:
-            tokenizer = await get_tokenizer()
-            # Fast Rust Tokenizer executes in <0.5ms on CPU
-            encoded = tokenizer(items, padding=False, truncation=True, max_length=128)
-            token_ids_batch = encoded["input_ids"]
-
-            import httpx
-            # Strict, realistic timeouts: connect 0.5s, read 2.0s
-            timeout = httpx.Timeout(connect=0.5, read=2.0, write=1.0, pool=2.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{inferpilot_url.rstrip('/')}/v1/embeddings",
-                    json={"model": settings.embedding_model, "input_ids": token_ids_batch},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()["data"]
-                    embeddings = [item["embedding"] for item in data]
-                    arr = np.asarray(embeddings, dtype=np.float32)
-
-                    # Defensive validations: shape, finiteness, non-zero norm
-                    if arr.shape != (len(items), settings.embedding_dim):
-                        raise ValueError(
-                            f"InferPilot returned shape {arr.shape}, expected ({len(items)}, {settings.embedding_dim})"
-                        )
-                    if not np.all(np.isfinite(arr)):
-                        raise ValueError("InferPilot returned non-finite (NaN/Inf) values")
-                    norms = np.linalg.norm(arr, axis=1)
-                    if np.any(norms < 1e-4):
-                        raise ValueError("InferPilot returned zero or near-zero vectors")
-
-                    return arr
-                else:
-                    log.warning(
-                        "embed.inferpilot_http_error",
-                        status_code=resp.status_code,
-                        body=resp.text[:200],
-                    )
-        except Exception as e:
-            log.warning("embed.inferpilot_fallback", error=str(e))
-
-    # 2. Local Fallback: PyTorch SentenceTransformer
     model = await get_model()
 
     def _do_encode():
@@ -157,6 +111,103 @@ async def embed_texts(texts: Iterable[str]) -> np.ndarray:
 
     arr = await asyncio.to_thread(_do_encode)
     return np.asarray(arr, dtype=np.float32)
+
+
+async def _embed_chunk_inferpilot(
+    client, inferpilot_url: str, token_ids_batch: list[list[int]]
+) -> np.ndarray:
+    """Send a single sub-batch (<=32 items, <=128 seq_len) to InferPilot C++ Server."""
+    resp = await client.post(
+        f"{inferpilot_url.rstrip('/')}/v1/embeddings",
+        json={"model": settings.embedding_model, "input_ids": token_ids_batch},
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"InferPilot HTTP {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()["data"]
+    embeddings = [item["embedding"] for item in data]
+    arr = np.asarray(embeddings, dtype=np.float32)
+
+    # Defensive validations: shape, finiteness, non-zero norm
+    if arr.shape != (len(token_ids_batch), settings.embedding_dim):
+        raise ValueError(
+            f"InferPilot returned shape {arr.shape}, expected ({len(token_ids_batch)}, {settings.embedding_dim})"
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("InferPilot returned non-finite (NaN/Inf) values")
+    norms = np.linalg.norm(arr, axis=1)
+    if np.any(norms < 1e-4):
+        raise ValueError("InferPilot returned zero or near-zero vectors")
+
+    return arr
+
+
+async def embed_texts(texts: Iterable[str]) -> np.ndarray:
+    """Encode a list of texts → 2D numpy array (n, 1024), L2-normalised.
+    
+    Robust Architecture:
+    1. Sub-batches items to <= 32 to respect C++ server engine batch profile.
+    2. Identifies sequences > 128 tokens and routes them to full-sequence PyTorch (zero silent truncation).
+    3. Executes short sequences (<= 128 tokens) on InferPilot C++ TensorRT engine.
+    4. Automatically falls back to local PyTorch on any C++ connection or server failure.
+    """
+    MAX_INFERPILOT_BATCH = 32
+    MAX_INFERPILOT_SEQ_LEN = 128
+
+    items = list(texts)
+    if not items:
+        return np.zeros((0, settings.embedding_dim), dtype=np.float32)
+
+    inferpilot_url = getattr(settings, "inferpilot_server_url", None)
+    if not inferpilot_url:
+        return await _embed_batch_pytorch(items)
+
+    try:
+        tokenizer = await get_tokenizer()
+        # Fast Rust Tokenizer without silent truncation to measure true sequence lengths
+        encoded = tokenizer(items, padding=False, truncation=False)
+        input_ids_list = encoded["input_ids"]
+
+        short_indices: list[int] = []
+        long_indices: list[int] = []
+        for idx, token_ids in enumerate(input_ids_list):
+            if len(token_ids) <= MAX_INFERPILOT_SEQ_LEN:
+                short_indices.append(idx)
+            else:
+                long_indices.append(idx)
+
+        embeddings_result: list[np.ndarray | None] = [None] * len(items)
+
+        # 1. Handle long sequences explicitly via full-context PyTorch (zero silent truncation)
+        if long_indices:
+            long_texts = [items[i] for i in long_indices]
+            max_long_len = max(len(input_ids_list[i]) for i in long_indices)
+            log.warning(
+                "embed.long_text_fallback_to_pytorch",
+                count=len(long_indices),
+                max_tokens=max_long_len,
+                threshold=MAX_INFERPILOT_SEQ_LEN,
+            )
+            long_vecs = await _embed_batch_pytorch(long_texts)
+            for idx, vec in zip(long_indices, long_vecs, strict=True):
+                embeddings_result[idx] = vec
+
+        # 2. Handle short sequences via InferPilot C++ Server (chunked into batches of <= 32)
+        if short_indices:
+            import httpx
+            timeout = httpx.Timeout(connect=0.5, read=2.0, write=1.0, pool=2.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for chunk_start in range(0, len(short_indices), MAX_INFERPILOT_BATCH):
+                    chunk_indices = short_indices[chunk_start : chunk_start + MAX_INFERPILOT_BATCH]
+                    chunk_token_ids = [input_ids_list[i] for i in chunk_indices]
+                    chunk_vecs = await _embed_chunk_inferpilot(client, inferpilot_url, chunk_token_ids)
+                    for idx, vec in zip(chunk_indices, chunk_vecs, strict=True):
+                        embeddings_result[idx] = vec
+
+        return np.asarray(embeddings_result, dtype=np.float32)
+
+    except Exception as e:
+        log.warning("embed.inferpilot_fallback", error=str(e))
+        return await _embed_batch_pytorch(items)
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
