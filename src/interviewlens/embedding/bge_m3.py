@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import Iterable
 
+import httpx
 import numpy as np
 
 from ..config import settings
@@ -23,6 +24,8 @@ _model = None
 _load_lock = asyncio.Lock()
 _tokenizer = None
 _tok_lock = asyncio.Lock()
+_inferpilot_client: httpx.AsyncClient | None = None
+_client_lock = asyncio.Lock()
 
 
 def _resolve_device() -> str:
@@ -93,6 +96,20 @@ async def get_tokenizer():
         _tokenizer = await asyncio.to_thread(_do_load)
         log.info("tokenizer.loaded", model=settings.embedding_model)
         return _tokenizer
+
+
+async def get_inferpilot_client() -> httpx.AsyncClient:
+    """Cached persistent HTTP client with keep-alive connection pooling."""
+    global _inferpilot_client
+    if _inferpilot_client is not None and not _inferpilot_client.is_closed:
+        return _inferpilot_client
+    async with _client_lock:
+        if _inferpilot_client is not None and not _inferpilot_client.is_closed:
+            return _inferpilot_client
+        timeout = httpx.Timeout(connect=1.0, read=5.0, write=2.0, pool=5.0)
+        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        _inferpilot_client = httpx.AsyncClient(timeout=timeout, limits=limits)
+        return _inferpilot_client
 
 
 async def _embed_batch_pytorch(items: list[str]) -> np.ndarray:
@@ -193,13 +210,25 @@ async def embed_texts(texts: Iterable[str]) -> np.ndarray:
 
         # 2. Handle short sequences via InferPilot C++ Server (chunked into batches of <= 32)
         if short_indices:
-            import httpx
-            timeout = httpx.Timeout(connect=0.5, read=2.0, write=1.0, pool=2.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                for chunk_start in range(0, len(short_indices), MAX_INFERPILOT_BATCH):
-                    chunk_indices = short_indices[chunk_start : chunk_start + MAX_INFERPILOT_BATCH]
-                    chunk_token_ids = [input_ids_list[i] for i in chunk_indices]
-                    chunk_vecs = await _embed_chunk_inferpilot(client, inferpilot_url, chunk_token_ids)
+            client = await get_inferpilot_client()
+            chunks_meta = []
+            for chunk_start in range(0, len(short_indices), MAX_INFERPILOT_BATCH):
+                chunk_indices = short_indices[chunk_start : chunk_start + MAX_INFERPILOT_BATCH]
+                chunk_token_ids = [input_ids_list[i] for i in chunk_indices]
+                chunks_meta.append((chunk_indices, chunk_token_ids))
+
+            if len(chunks_meta) == 1:
+                chunk_indices, chunk_token_ids = chunks_meta[0]
+                chunk_vecs = await _embed_chunk_inferpilot(client, inferpilot_url, chunk_token_ids)
+                for idx, vec in zip(chunk_indices, chunk_vecs, strict=True):
+                    embeddings_result[idx] = vec
+            else:
+                tasks = [
+                    _embed_chunk_inferpilot(client, inferpilot_url, chunk_tokens)
+                    for _, chunk_tokens in chunks_meta
+                ]
+                results = await asyncio.gather(*tasks)
+                for (chunk_indices, _), chunk_vecs in zip(chunks_meta, results, strict=True):
                     for idx, vec in zip(chunk_indices, chunk_vecs, strict=True):
                         embeddings_result[idx] = vec
 
