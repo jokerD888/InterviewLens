@@ -141,8 +141,13 @@ def render_aggregator_md(data: dict) -> str:
         parts.append("## 高频考点 Top 10\n")
         for t in topics:
             name = t.get("topic", "")
-            freq = t.get("frequency", 1)
-            parts.append(f"### {name} <sub>×{freq}</sub>\n")
+            q_cnt = t.get("question_count") or t.get("frequency", 1)
+            p_cnt = t.get("post_count")
+            if p_cnt and p_cnt > 0:
+                count_str = f"<sub>×{q_cnt}题 / {p_cnt}篇面经</sub>"
+            else:
+                count_str = f"<sub>×{q_cnt}</sub>"
+            parts.append(f"### {name} {count_str}\n")
             for q in t.get("sample_questions") or []:
                 parts.append(f"> {q}\n")
             parts.append("")
@@ -198,9 +203,11 @@ def build_aggregator_messages(
     lines = []
     for i, q in enumerate(questions, 1):
         cat = q.get("category") or ""
-        freq = q.get("freq") or 1
+        q_cnt = q.get("question_count", q.get("freq", 1))
+        p_cnt = q.get("post_count")
+        cnt_info = f"频次: {q_cnt}题/{p_cnt}篇" if p_cnt else f"freq={q_cnt}"
         prefix = f"{i:3}. [{cat}]" if cat else f"{i:3}."
-        lines.append(f"{prefix} (freq={freq}) {q['content']}")
+        lines.append(f"{prefix} ({cnt_info}) {q['content']}")
     questions_block = "\n".join(lines) or "(无题目)"
 
     user = (
