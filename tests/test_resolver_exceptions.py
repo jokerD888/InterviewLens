@@ -81,7 +81,7 @@ async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytes
     async def _persist_new(entity_type, alias, name):
         return res.ResolveResult(canonical_id=7, confidence=0.5, source="new")
 
-    def _tool(**kwargs):
+    async def _tool(**kwargs):
         return SimpleNamespace(
             arguments={"decision": "match", "canonical_id": 99, "confidence": 0.95}
         )
