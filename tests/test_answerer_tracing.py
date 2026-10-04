@@ -100,3 +100,17 @@ async def test_empty_answer_is_recorded_as_failure_and_not_cached(dependencies):
         status_message="Empty answer",
     )
     ans.cache_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_truncated_answer_is_not_cached_as_complete(dependencies):
+    lf, create = dependencies
+    create.return_value.choices[0].finish_reason = "length"
+    assert await ans.generate_one(content="question", category=None) is None
+    lf.trace.return_value.generation.return_value.end.assert_called_once_with(
+        output="",
+        usage={"prompt_tokens": 10, "completion_tokens": 20},
+        level="ERROR",
+        status_message="Truncated answer",
+    )
+    ans.cache_set.assert_not_awaited()

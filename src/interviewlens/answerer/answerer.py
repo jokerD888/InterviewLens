@@ -88,6 +88,10 @@ async def generate_one(
         return None
 
     answer = (resp.choices[0].message.content or "").strip()
+    truncated = getattr(resp.choices[0], "finish_reason", None) == "length"
+    if truncated:
+        log.warning("answer.truncated", max_tokens=MAX_TOKENS)
+        answer = ""
     usage = resp.usage.model_dump() if resp.usage else None
     if usage:
         await incr_tokens(
@@ -100,7 +104,8 @@ async def generate_one(
                 generation.end(output=answer, usage=usage)
             else:
                 generation.end(
-                    output=answer, usage=usage, level="ERROR", status_message="Empty answer",
+                    output=answer, usage=usage, level="ERROR",
+                    status_message="Truncated answer" if truncated else "Empty answer",
                 )
     if own_client is not None:
         with swallow("answer.trace_flush_failed"):
