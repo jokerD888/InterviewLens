@@ -13,6 +13,7 @@ Dead-letter:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import threading
 from typing import Any
@@ -62,13 +63,20 @@ class BackgroundLoopWorker:
         loop = cls.get_loop()
         try:
             current_loop = asyncio.get_running_loop()
-            if current_loop is loop:
-                raise RuntimeError("Cannot invoke _run_async from inside the worker event loop thread")
         except RuntimeError:
-            pass
+            current_loop = None
+
+        if current_loop is loop:
+            raise RuntimeError("Cannot invoke _run_async from inside the worker event loop thread")
 
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except (TimeoutError, concurrent.futures.TimeoutError) as exc:
+            future.cancel()
+            raise TimeoutError(
+                f"Task execution timed out after {timeout} seconds and was cancelled."
+            ) from exc
 
 
 @worker_process_init.connect

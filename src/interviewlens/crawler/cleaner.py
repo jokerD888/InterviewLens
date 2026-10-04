@@ -140,7 +140,7 @@ def clean_html(html: str, *, url: str | None = None) -> CleanedDoc:
         text = trafilatura.extract(
             html,
             url=url,
-            favor_recall=True,
+            favor_precision=True,
             include_comments=False,
             include_tables=False,
             no_fallback=False,

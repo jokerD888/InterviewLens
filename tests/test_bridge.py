@@ -98,7 +98,7 @@ def test_bridge_routes_mounted_at_both_prefixes() -> None:
     """Verify both /bridge and /api/bridge endpoints exist in the FastAPI app."""
     from interviewlens.api.app import app
 
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"].keys())
     assert "/bridge/generate-answers" in paths
     assert "/bridge/export" in paths
     assert "/api/bridge/generate-answers" in paths

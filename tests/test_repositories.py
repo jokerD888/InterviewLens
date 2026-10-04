@@ -37,6 +37,7 @@ async def test_replace_questions_retains_embedding_and_ai_answer():
 
     # Mock session
     mock_session = AsyncMock()
+    mock_session.add = MagicMock()
     mock_result = MagicMock()
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = existing_rows
