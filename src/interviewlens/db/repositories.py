@@ -132,13 +132,28 @@ async def replace_questions(
     post_id: int,
     rounds: list[dict],
 ) -> int:
-    """Drop existing questions for a post and insert the new round/question rows.
+    """Sync questions for a post, preserving existing embeddings and AI answers when content matches.
 
-    ``rounds`` is the JSON-shaped list from ExtractedPost. Embedding stays NULL
-    here — D6 will backfill it. Returns total inserted question count.
+    Instead of blindly dropping all rows, this:
+    1. Reuses matching existing questions by content (updating round_no, round_type,
+       category, answer_brief, while PRESERVING embedding and answer_ai).
+    2. Adds new questions that didn't exist before.
+    3. Removes orphaned questions that no longer appear in the extracted rounds.
     """
-    await session.execute(delete(Question).where(Question.post_id == post_id))
-    inserted = 0
+    existing_result = await session.execute(
+        select(Question).where(Question.post_id == post_id)
+    )
+    existing_rows = list(existing_result.scalars().all())
+
+    # Map content -> queue of existing questions (handling potential duplicate questions within same post)
+    existing_by_content: dict[str, list[Question]] = {}
+    for eq in existing_rows:
+        key = " ".join(eq.content.split())
+        existing_by_content.setdefault(key, []).append(eq)
+
+    retained_ids: set[int] = set()
+    total_active = 0
+
     for r in rounds:
         round_no = int(r.get("round_no") or 1)
         round_type = r.get("round_type")
@@ -146,8 +161,23 @@ async def replace_questions(
             content = (q.get("content") or "").strip()
             if not content:
                 continue
-            session.add(
-                Question(
+
+            key = " ".join(content.split())
+            matched_pool = existing_by_content.get(key)
+
+            if matched_pool:
+                # Reuse existing question, preserving id, embedding, and answer_ai!
+                matched_q = matched_pool.pop(0)
+                matched_q.round_no = round_no
+                matched_q.round_type = round_type
+                matched_q.category = q.get("category")
+                matched_q.answer_brief = q.get("answer_brief")
+                if matched_q.id is not None:
+                    retained_ids.add(matched_q.id)
+                total_active += 1
+            else:
+                # Brand new question
+                new_q = Question(
                     post_id=post_id,
                     round_no=round_no,
                     round_type=round_type,
@@ -155,10 +185,18 @@ async def replace_questions(
                     category=q.get("category"),
                     answer_brief=q.get("answer_brief"),
                 )
-            )
-            inserted += 1
+                session.add(new_q)
+                total_active += 1
+
+    # Clean up orphaned questions that are no longer present
+    orphaned_ids = [eq.id for eq in existing_rows if eq.id is not None and eq.id not in retained_ids]
+    if orphaned_ids:
+        await session.execute(
+            delete(Question).where(Question.id.in_(orphaned_ids))
+        )
+
     await session.flush()
-    return inserted
+    return total_active
 
 
 async def replace_post_links(

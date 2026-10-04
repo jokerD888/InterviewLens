@@ -92,3 +92,14 @@ async def test_export_no_token_configured(monkeypatch) -> None:
     with pytest.raises(Exception) as exc_info:
         await export_to_daily_prep(req_mock)
     assert "Token" in str(exc_info.value.detail) or exc_info.value.status_code == 502
+
+
+def test_bridge_routes_mounted_at_both_prefixes() -> None:
+    """Verify both /bridge and /api/bridge endpoints exist in the FastAPI app."""
+    from interviewlens.api.app import app
+
+    paths = {route.path for route in app.routes}
+    assert "/bridge/generate-answers" in paths
+    assert "/bridge/export" in paths
+    assert "/api/bridge/generate-answers" in paths
+    assert "/api/bridge/export" in paths

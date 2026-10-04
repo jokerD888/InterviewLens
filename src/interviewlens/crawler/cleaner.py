@@ -1,7 +1,9 @@
 """HTML → cleaned text via trafilatura, with a BeautifulSoup fallback."""
 from __future__ import annotations
 
+import html as _html
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import trafilatura
@@ -55,10 +57,19 @@ _NC_NOISE_TOKENS: set[str] = {
     "全部评论", "暂无评论", "广告", "相关推荐", "回复TA",
 }
 
+# Content indicators: if any of these are present, the line is part of an interview
+# question, code, or description (e.g. "3. 设计一个高并发点赞和收藏系统"),
+# so it MUST NOT trigger action-bar truncation.
+_CONTENT_INDICATOR_RE = re.compile(
+    r"[？?：:]|设计|系统|实现|方案|如何|怎么|高并发|一致性|架构|思考|考点|场景|手撕|题目|回答|问[：:\s]|第[一二三四五六七八九十\d]+[题问]|Q\d+|\d+[\.、]"
+)
+
 # Marker: once we see a line matching this, everything from that point onward
 # is the comment section / engagement area — truncate the rest.
-# Nowcoder action bar always contains "点赞" + "收藏" together.
+# A true Nowcoder action bar line is short, contains both "点赞" and "收藏", and consists
+# exclusively of action tokens, numbers, and separators without interview content.
 _NC_COMMENT_MARKER = re.compile(r"点赞.*收藏|收藏.*点赞")
+_NC_ACTION_BAR_CHARS = re.compile(r"^[\d\s·/|()（）+\-—点赞收藏分享投币转发评论浏览举报关注赞同推荐TA]+$")
 
 
 def strip_nowcoder_noise(text: str) -> str:
@@ -67,7 +78,7 @@ def strip_nowcoder_noise(text: str) -> str:
     Two-phase approach:
     1. **Truncate** at the comment-section marker — the Nowcoder action bar
        (contains "点赞" + "收藏") always appears after the post body and
-       before the comment section.  Everything after it is noise.
+       before the comment section. Everything after it is noise.
     2. **Line-filter** residual UI patterns (pure numbers, UI tokens, etc.)
        that may appear before the marker.
     """
@@ -83,9 +94,13 @@ def strip_nowcoder_noise(text: str) -> str:
         # Skip very short lines — the marker is a specific action-bar pattern
         if len(stripped) < 4:
             continue
-        if _NC_COMMENT_MARKER.search(stripped) and len(stripped) < 30:
-            cutoff = i
-            break
+        if _NC_COMMENT_MARKER.search(stripped) and len(stripped) < 40:
+            # Protect interview questions (e.g. "请设计一个高并发点赞收藏系统") from false truncation
+            if _CONTENT_INDICATOR_RE.search(stripped):
+                continue
+            if _NC_ACTION_BAR_CHARS.match(stripped):
+                cutoff = i
+                break
     lines = lines[:cutoff]
 
     # Phase 2: line-level filtering
@@ -147,4 +162,7 @@ def clean_html(html: str, *, url: str | None = None) -> CleanedDoc:
 
     text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
     text = strip_nowcoder_noise(text)
+    if text:
+        text = _html.unescape(text)
+        text = unicodedata.normalize("NFKC", text)
     return CleanedDoc(title=title, text=text, char_count=len(text))

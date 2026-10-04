@@ -44,3 +44,24 @@ def test_clean_extracts_main_text() -> None:
 def test_clean_handles_minimal() -> None:
     doc = clean_html("<html><body><p>abc</p></body></html>")
     assert doc.text == "abc"
+
+
+def test_strip_nowcoder_noise_preserves_system_design_questions() -> None:
+    from interviewlens.crawler.cleaner import strip_nowcoder_noise
+
+    raw = """
+1. 自我介绍
+2. MySQL 索引失效场景
+3. 请设计一个高并发点赞和收藏系统
+4. 点赞收藏功能的数据一致性如何保证？
+5. 反问环节
+点赞 24 收藏 18 分享
+全部评论 (12)
+    """.strip()
+
+    cleaned = strip_nowcoder_noise(raw)
+    assert "请设计一个高并发点赞和收藏系统" in cleaned
+    assert "点赞收藏功能的数据一致性如何保证？" in cleaned
+    assert "反问环节" in cleaned
+    assert "全部评论" not in cleaned
+    assert "点赞 24 收藏 18 分享" not in cleaned

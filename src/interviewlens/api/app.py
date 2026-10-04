@@ -53,6 +53,7 @@ app.include_router(taxonomy_router)
 app.include_router(search_router)
 app.include_router(summary_router)
 app.include_router(bridge_router)
+app.include_router(bridge_router, prefix="/api")  # backward-compatible alias for direct callers
 app.include_router(admin_router)
 
 

@@ -14,26 +14,74 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Any
 
 import redis
+from celery.signals import worker_process_init
 
 from ..config import settings
 from ..logging import log
 from .celery_app import celery_app
 
 
-def _run_async(coro: Any) -> Any:
-    """Run an async coroutine inside a Celery sync task safely."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Nested loop — schedule via threadsafe future. Rare in workers.
-            future = asyncio.run_coroutine_threadsafe(coro, loop)
-            return future.result()
-    except RuntimeError:
-        pass
-    return asyncio.run(coro)
+class BackgroundLoopWorker:
+    """Maintains a persistent, dedicated event loop thread inside the Celery worker process.
+
+    This prevents:
+    1. 'Event loop is closed' errors caused by asyncio.run() destroying loops while
+       global AsyncEngine connection pools retain pooled connections bound to old loops.
+    2. Same-thread deadlocks when calling run_coroutine_threadsafe.
+    """
+    _instance: BackgroundLoopWorker | None = None
+    _lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="CeleryAsyncWorkerLoop",
+        )
+        self.thread.start()
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    @classmethod
+    def get_loop(cls) -> asyncio.AbstractEventLoop:
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance.loop
+
+    @classmethod
+    def run_coroutine(cls, coro: Any, timeout: float | None = 600.0) -> Any:
+        loop = cls.get_loop()
+        try:
+            current_loop = asyncio.get_running_loop()
+            if current_loop is loop:
+                raise RuntimeError("Cannot invoke _run_async from inside the worker event loop thread")
+        except RuntimeError:
+            pass
+
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=timeout)
+
+
+@worker_process_init.connect
+def _reset_worker_loop_and_db(**kwargs: Any) -> None:
+    """Reset worker state after Celery prefork child process initialization."""
+    from ..db import reset_engine
+    reset_engine()
+    BackgroundLoopWorker._instance = None
+
+
+def _run_async(coro: Any, timeout: float | None = 600.0) -> Any:
+    """Run an async coroutine safely inside a persistent background event loop."""
+    return BackgroundLoopWorker.run_coroutine(coro, timeout=timeout)
 
 
 def _dlq_push(task_name: str, payload: dict) -> None:
