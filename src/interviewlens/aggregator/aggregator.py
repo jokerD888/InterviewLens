@@ -141,7 +141,7 @@ async def _fetch_candidate_questions(
                   OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
               )
         )
-        SELECT q.id, q.content, q.category, q.answer_brief,
+        SELECT q.id, q.post_id, q.content, q.category, q.answer_brief,
                bp.content_score, p.source_url
         FROM questions q
         JOIN bucket_posts bp ON bp.id = q.post_id
@@ -299,12 +299,27 @@ def _cluster_questions(
                 questions[index]["id"],
             ),
         )
-        cluster = {**questions[representative], "freq": len(members)}
+        post_ids = {
+            questions[index].get("post_id")
+            for index in members
+            if questions[index].get("post_id") is not None
+        }
+        sorted_members = sorted(members, key=lambda idx: questions[idx]["id"])
+        cluster = {
+            **questions[representative],
+            "freq": len(members),
+            "question_count": len(members),
+            "post_count": len(post_ids) if post_ids else 1,
+            "member_ids": [questions[idx]["id"] for idx in sorted_members],
+            "member_contents": [questions[idx]["content"] for idx in sorted_members],
+            "member_post_ids": sorted(post_ids),
+        }
         clusters.append(cluster)
 
     clusters.sort(
         key=lambda x: (
-            -x.get("freq", 1),
+            -x.get("question_count", x.get("freq", 1)),
+            -x.get("post_count", 1),
             -(x.get("content_score", x.get("quality_score")) or 0),
             x.get("id", 0),
         )
@@ -401,6 +416,18 @@ def _parse_aggregator_output(
     known_questions = {
         _normalise_question_text(str(q.get("content", ""))) for q in questions
     }
+    cluster_by_content: dict[str, dict] = {}
+    for cluster in questions:
+        norm_rep = _normalise_question_text(str(cluster.get("content", "")))
+        if norm_rep:
+            known_questions.add(norm_rep)
+            cluster_by_content[norm_rep] = cluster
+        for member_text in cluster.get("member_contents", []):
+            norm_mem = _normalise_question_text(str(member_text))
+            if norm_mem:
+                known_questions.add(norm_mem)
+                cluster_by_content[norm_mem] = cluster
+
     referenced_questions = [
         *(
             question
@@ -423,6 +450,51 @@ def _parse_aggregator_output(
         raise AggregatorOutputError(
             f"Aggregator referenced question(s) not present in input: {preview}"
         )
+
+    # Backend frequency and post-count calculation from deduplicated clusters
+    for topic in result.high_frequency_topics:
+        seen_cluster_keys: set[int | str] = set()
+        matched_clusters: list[dict] = []
+        for q_text in topic.sample_questions:
+            norm_q = _normalise_question_text(str(q_text))
+            matched = cluster_by_content.get(norm_q)
+            if matched is not None:
+                ckey = matched.get("id", norm_q)
+                if ckey not in seen_cluster_keys:
+                    seen_cluster_keys.add(ckey)
+                    matched_clusters.append(matched)
+
+        if matched_clusters:
+            calc_q_count = 0
+            for c in matched_clusters:
+                if "question_count" in c:
+                    calc_q_count += int(c["question_count"])
+                elif "freq" in c:
+                    calc_q_count += int(c["freq"])
+            if calc_q_count == 0:
+                calc_q_count = topic.frequency or len(matched_clusters)
+
+            all_posts: set[int] = set()
+            for c in matched_clusters:
+                if c.get("member_post_ids"):
+                    all_posts.update(c["member_post_ids"])
+                elif c.get("post_id"):
+                    all_posts.add(c["post_id"])
+            if all_posts:
+                calc_post_count = max(1, len(all_posts))
+            else:
+                calc_post_count = max(1, sum(int(c.get("post_count", 1)) for c in matched_clusters))
+        else:
+            calc_q_count = topic.frequency or len(topic.sample_questions)
+            calc_post_count = 1
+
+        topic.frequency = calc_q_count
+        topic.question_count = calc_q_count
+        topic.post_count = calc_post_count
+
+    result.high_frequency_topics.sort(
+        key=lambda t: (-t.frequency, -(t.post_count or 1), t.topic)
+    )
 
     return result
 

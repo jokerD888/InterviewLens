@@ -23,10 +23,13 @@ from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..llm.deepseek import call_tool
 from ..llm.prompts import NORMALIZE_FUNCTION_SCHEMA, build_normalizer_messages
 from ..logging import log
+from .rules import has_lexical_anchor, is_entity_incompatible
 
-EMBED_THRESHOLD_HIGH: float = 0.85   # >= this → auto-match (no LLM)
-EMBED_THRESHOLD_LOW: float = 0.55    # below this → no candidate sent to LLM
-LLM_MIN_CONFIDENCE: float = 0.7      # below this → fall back to new canonical
+EMBED_THRESHOLD_AUTO_MATCH: float = 0.92  # >= this AND lexical anchor AND not incompatible → auto-match
+EMBED_THRESHOLD_HIGH: float = EMBED_THRESHOLD_AUTO_MATCH  # backward-compatible alias
+EMBED_THRESHOLD_LOW: float = 0.55         # below this → no candidate sent to LLM
+LLM_MIN_CONFIDENCE: float = 0.70          # below this → fall back to new canonical
+REVIEW_CONFIDENCE_THRESHOLD: float = 0.85 # between 0.70 and 0.85 or weak lexical anchor → flagged for review
 TOP_K: int = 5
 
 
@@ -35,6 +38,8 @@ class ResolveResult:
     canonical_id: int
     confidence: float
     source: str  # alias | embedding | llm | new
+    needs_review: bool = False
+    review_reason: str = ""
 
 
 # --------------------------------------------------------------- helpers
@@ -210,6 +215,17 @@ async def _canonical_exists(entity_type: str, canonical_id: int) -> bool:
     return row is not None
 
 
+async def _get_canonical_name(entity_type: str, canonical_id: int) -> str | None:
+    """Retrieve canonical name for post-validation checks."""
+    Model = _model_for(entity_type)
+    async with session_scope() as session:
+        row = (
+            await session.execute(select(Model.canonical).where(Model.id == canonical_id))
+        ).scalar_one_or_none()
+    return str(row) if row is not None else None
+
+
+
 async def _persist_new_canonical(
     entity_type: str,
     alias: str,
@@ -282,14 +298,39 @@ async def resolve_entity(
 
     # --- tier 2: embedding
     top = await _search_canonicals(entity_type, alias)
-    if top:
-        best = top[0]
-        if best["similarity"] >= EMBED_THRESHOLD_HIGH:
+    # Pre-filtering: exclude candidates that violate domain/language incompatibility rules
+    valid_candidates: list[dict[str, float | int | str]] = []
+    candidates_name_map: dict[int, str] = {}
+    for c in top:
+        c_id = int(c["id"])
+        c_name = str(c["canonical"])
+        candidates_name_map[c_id] = c_name
+        is_bad, reason = is_entity_incompatible(entity_type, alias, c_name)
+        if is_bad:
+            log.warning(
+                "normalize.candidate_excluded_incompatible",
+                entity_type=entity_type,
+                alias=alias,
+                candidate=c_name,
+                similarity=c["similarity"],
+                reason=reason,
+            )
+            continue
+        valid_candidates.append(c)
+
+    if valid_candidates:
+        best = valid_candidates[0]
+        # Dual-gating for Tier-2 auto match:
+        # 1. High cosine similarity (>= EMBED_THRESHOLD_AUTO_MATCH)
+        # 2. Strict lexical anchor (common stem / substring / character overlap)
+        # 3. Passed incompatibility check above
+        has_anchor = has_lexical_anchor(alias, str(best["canonical"]))
+        if float(best["similarity"]) >= EMBED_THRESHOLD_AUTO_MATCH and has_anchor:
             winner_id, winner_confidence, claimed = await _write_alias(
                 entity_type,
                 alias,
-                best["id"],
-                confidence=best["similarity"],
+                int(best["id"]),
+                confidence=float(best["similarity"]),
             )
             log.info(
                 "normalize.tier2_hit",
@@ -303,9 +344,11 @@ async def resolve_entity(
                 canonical_id=winner_id,
                 confidence=winner_confidence,
                 source="embedding" if claimed else "alias",
+                needs_review=False,
             )
-        # filter out very low-similarity candidates before sending to LLM
-        candidates_for_llm = [c for c in top if c["similarity"] >= EMBED_THRESHOLD_LOW]
+
+        # Candidates eligible for LLM evaluation
+        candidates_for_llm = [c for c in valid_candidates if c["similarity"] >= EMBED_THRESHOLD_LOW]
     else:
         candidates_for_llm = []
 
@@ -342,26 +385,58 @@ async def resolve_entity(
         except (TypeError, ValueError):
             cid = 0
             conf = 0.0
+
         if cid and conf >= LLM_MIN_CONFIDENCE and await _canonical_exists(entity_type, cid):
-            winner_id, winner_confidence, claimed = await _write_alias(
-                entity_type,
-                alias,
-                cid,
-                confidence=conf,
+            # Post-Validation Gate: inspect chosen canonical name
+            chosen_name = candidates_name_map.get(cid)
+            if not chosen_name:
+                chosen_name = await _get_canonical_name(entity_type, cid)
+
+            is_bad, bad_reason = (
+                is_entity_incompatible(entity_type, alias, chosen_name)
+                if chosen_name
+                else (False, "")
             )
-            log.info(
-                "normalize.tier3_match",
-                entity_type=entity_type,
-                alias=alias,
-                id=winner_id,
-                confidence=winner_confidence,
-                alias_claimed=claimed,
-            )
-            return ResolveResult(
-                canonical_id=winner_id,
-                confidence=winner_confidence,
-                source="llm" if claimed else "alias",
-            )
+            if is_bad:
+                log.warning(
+                    "normalize.llm_match_rejected_incompatible",
+                    entity_type=entity_type,
+                    alias=alias,
+                    chosen_id=cid,
+                    chosen_name=chosen_name,
+                    reason=bad_reason,
+                )
+                # LLM hallucinated an incompatible merge; refuse and proceed to tier 4
+            else:
+                has_anchor = has_lexical_anchor(alias, chosen_name) if chosen_name else False
+                needs_review = (conf < REVIEW_CONFIDENCE_THRESHOLD) or (not has_anchor)
+                review_reason = (
+                    "llm_low_confidence_or_weak_lexical_anchor" if needs_review else ""
+                )
+
+                winner_id, winner_confidence, claimed = await _write_alias(
+                    entity_type,
+                    alias,
+                    cid,
+                    confidence=conf,
+                )
+                log.info(
+                    "normalize.tier3_match",
+                    entity_type=entity_type,
+                    alias=alias,
+                    id=winner_id,
+                    confidence=winner_confidence,
+                    alias_claimed=claimed,
+                    needs_review=needs_review,
+                )
+                return ResolveResult(
+                    canonical_id=winner_id,
+                    confidence=winner_confidence,
+                    source="llm" if claimed else "alias",
+                    needs_review=needs_review,
+                    review_reason=review_reason,
+                )
+
 
     # --- tier 4: create a new canonical
     new_name = (decision or {}).get("canonical_name") or alias

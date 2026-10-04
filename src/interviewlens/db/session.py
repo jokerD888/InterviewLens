@@ -48,6 +48,22 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
         try:
             yield session
             await session.commit()
-        except Exception:  # transaction boundary: rollback + re-raise (never swallow)
+        except BaseException:  # transaction boundary: rollback on any error or cancellation
             await session.rollback()
             raise
+
+
+async def dispose_engine() -> None:
+    """Explicitly dispose the async engine connection pool."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
+
+
+def reset_engine() -> None:
+    """Drop references to engine and session factory (for child fork initialization)."""
+    global _engine, _session_factory
+    _engine = None
+    _session_factory = None

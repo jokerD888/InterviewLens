@@ -20,6 +20,8 @@ class AggregatorTopic(BaseModel):
     topic: str = Field(min_length=1)
     frequency: int = Field(ge=1)
     sample_questions: list[NonEmptyString] = Field(min_length=1)
+    question_count: int | None = Field(default=None, ge=1)
+    post_count: int | None = Field(default=None, ge=1)
 
 
 class AggregatorEdgeCase(BaseModel):

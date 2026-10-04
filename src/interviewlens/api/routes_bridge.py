@@ -16,7 +16,7 @@ from .schemas import (
     BridgeGeneratedAnswer,
 )
 
-router = APIRouter(prefix="/api/bridge", tags=["bridge"])
+router = APIRouter(prefix="/bridge", tags=["bridge"])
 
 
 @router.post("/generate-answers", response_model=BridgeGenerateResponse)
