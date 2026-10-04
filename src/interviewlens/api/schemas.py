@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from ..position_taxonomy import PositionProfile
+
 
 class CompanyOut(BaseModel):
     id: int
@@ -133,6 +135,10 @@ class FeedQuestionOut(BaseModel):
     answer_ai: str | None = None
 
 
+class PositionProfileOut(PositionProfile):
+    origin: str | None = None
+
+
 class PostFeedItem(BaseModel):
     id: int
     title: str | None = None
@@ -144,6 +150,7 @@ class PostFeedItem(BaseModel):
     ranking_score: int | None = None
     companies: list[str] = Field(default_factory=list)
     positions: list[str] = Field(default_factory=list)
+    position_profiles: list[PositionProfileOut] = Field(default_factory=list)
     cleaned_text: str | None = None
     excerpt: str | None = None
     round_types: list[str] = Field(default_factory=list)

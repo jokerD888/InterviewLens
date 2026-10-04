@@ -1,6 +1,14 @@
 # InterviewLens Prompt 库
 
-所有 LLM prompt 在此集中管理，**修改 prompt 必须升 `version`，并触发 `extract_version` 不一致的 posts 重抽**。
+本页记录历史 Prompt 和设计说明，运行时以 `src/interviewlens/llm/prompts.py` 与 `schema.py` 为准。修改提取合同必须升级有效版本、使旧缓存失效；历史帖子的重抽应单独安排，不自动全量发起付费请求。
+
+## 当前 Extractor 合同：四维岗位
+
+当前有效提取版本为配置的 `extract_prompt_version + TAXONOMY_VERSION`。除了原始 `positions`，工具要求返回 `position_profiles`：固定单选 `category`，以及分别受控的 `specializations`、`domains`、`skills`。每条标签记录原文证据与来源；推断结果待审核，无法确定的类别为空。模型不能创建一级类别，也不能声明人工审核通过。
+
+例如原文明示“C++后端基础架构工程师”时，类别为“后端”、方向为“基础架构”、技能为“C++”；不能凭这个名称补出 Redis、Linux 等未出现的技能。推荐帖和评论会在提取前剥离。岗位未明示时允许基于职责推断，但不凭语言名或通用算法题单独定类。
+
+完整字段、证据校验、历史预览和审核导入见 [岗位分类实施说明](POSITION_TAXONOMY_IMPLEMENTATION.md)。下方 v1 Schema 与 Prompt 保留为历史参考，不代表当前完整工具合同。
 
 ## 1. Extractor Prompt（v1）
 

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Annotated
 
 import numpy as np
 import redis.asyncio as aioredis
@@ -18,8 +19,10 @@ from ..db import Post
 from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..logging import log
 from ..observability import get_redis, incr_cache
+from ..position_taxonomy import TAXONOMY_VERSION, PositionCategory
 from ..scoring import FRESHNESS_POLICY_VERSION, freshness_case_sql, ranking_score, score_freshness
 from .deps import get_session
+from .position_filters import profile_predicate
 from .schemas import PostBrief, QuestionOut
 
 router = APIRouter(tags=["search"])
@@ -42,8 +45,12 @@ def _embed_key(q: str) -> str:
 
 
 def _result_key(q: str, filters: dict) -> str:
+    facet_defaults = {
+        "position_category": None, "specializations": [], "domains": [], "skills": [],
+        "include_unreviewed": False, "taxonomy_version": TAXONOMY_VERSION,
+    }
     canonical = json.dumps(
-        {"q": q, "freshness_policy": FRESHNESS_POLICY_VERSION, **filters},
+        {"q": q, "freshness_policy": FRESHNESS_POLICY_VERSION, **facet_defaults, **filters},
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -108,6 +115,11 @@ async def search(
     q: str = Query(..., min_length=2, description="Free-text query"),
     company: str | None = None,
     position: str | None = None,
+    position_category: PositionCategory | None = None,
+    specializations: Annotated[list[str] | None, Query()] = None,
+    domains: Annotated[list[str] | None, Query()] = None,
+    skills: Annotated[list[str] | None, Query()] = None,
+    include_unreviewed: bool = False,
     min_quality: int = 0,
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
@@ -124,9 +136,17 @@ async def search(
         "position": position,
         "min_quality": min_quality,
         "limit": limit_val,
+        "position_category": position_category,
+        "specializations": sorted(set(specializations or [])),
+        "domains": sorted(set(domains or [])),
+        "skills": sorted(set(skills or [])),
+        "include_unreviewed": include_unreviewed,
+        "taxonomy_version": TAXONOMY_VERSION,
     }
+    facet_params: dict[str, object] = {}
+    predicate = profile_predicate(position_category, specializations, domains, skills, include_unreviewed, facet_params)
 
-    if settings.search_cache_enabled:
+    if settings.search_cache_enabled and not predicate:
         # Layer 2: full result cache
         rkey = _result_key(q, filters)
         cached_rows = await _result_cache_get(rkey)
@@ -167,10 +187,13 @@ async def search(
         "embedding_version": EMBEDDING_VERSION,
     }
     joins = "JOIN posts po ON po.id = q.post_id"
+    if predicate:
+        clauses.append(predicate)
+        params.update(facet_params)
     if company:
         clauses.append(
             "EXISTS ("
-            "SELECT 1 FROM post_company_position pcp_c "
+            "SELECT 1 FROM post_companies pcp_c "
             "JOIN companies c ON c.id = pcp_c.company_id "
             "WHERE pcp_c.post_id = po.id AND c.canonical = :company"
             ")"
@@ -208,7 +231,7 @@ async def search(
     rows = (await session.execute(sa_text(sql), params)).mappings().all()
     out = [QuestionOut(**dict(r)) for r in rows]
 
-    if settings.search_cache_enabled:
+    if settings.search_cache_enabled and not predicate:
         await _result_cache_set(rkey, [o.model_dump() for o in out])
 
     return out
@@ -224,12 +247,14 @@ async def get_post(
         raise HTTPException(404, "post not found")
 
     sql = """
-    SELECT array_agg(DISTINCT c.canonical) AS companies,
-           array_agg(DISTINCT p.canonical) AS positions
-    FROM post_company_position pcp
-    JOIN companies c ON c.id = pcp.company_id
-    JOIN positions p ON p.id = pcp.position_id
-    WHERE pcp.post_id = :pid
+    SELECT array_agg(DISTINCT c.canonical) FILTER (WHERE c.canonical IS NOT NULL) AS companies,
+           array_agg(DISTINCT p.canonical) FILTER (WHERE p.canonical IS NOT NULL) AS positions
+    FROM posts po
+    LEFT JOIN post_companies pc ON pc.post_id = po.id
+    LEFT JOIN companies c ON c.id = pc.company_id
+    LEFT JOIN post_company_position pcp ON pcp.post_id = po.id
+    LEFT JOIN positions p ON p.id = pcp.position_id
+    WHERE po.id = :pid
     """
     row = (await session.execute(sa_text(sql), {"pid": post_id})).mappings().first()
     as_of = datetime.now(timezone.utc)

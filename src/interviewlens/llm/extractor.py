@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..crawler.cleaner import strip_nowcoder_noise
 from ..logging import log
 from ..observability import incr_cache, incr_tokens
+from ..position_taxonomy import PositionProfile, validate_evidence
 from .cache import cache_get, cache_set, make_cache_key
 from .deepseek import ToolCallResult, call_tool
 from .prompts import build_extractor_messages, get_extractor_prompt_version
@@ -29,6 +31,9 @@ async def extract_from_text(
     if not cleaned_text or not cleaned_text.strip():
         raise ValueError("cleaned_text is empty")
 
+    cleaned_text = strip_nowcoder_noise(cleaned_text)
+    if not cleaned_text.strip():
+        raise ValueError("author content is empty after cleaning")
     version = get_extractor_prompt_version()
     cache_key = make_cache_key(
         namespace="extract",
@@ -42,6 +47,9 @@ async def extract_from_text(
             log.info("extract.cache_hit", post_id=post_id, key=cache_key[-12:])
             await incr_cache(hit=True)
             parsed = ExtractedPost.model_validate(cached["arguments"])
+            parsed.position_profiles = [validate_evidence(p, cleaned_text) for p in parsed.position_profiles]
+            if not parsed.position_profiles:
+                parsed.position_profiles = [PositionProfile()]
             return parsed, {
                 "cache_hit": True,
                 "usage": None,
@@ -87,6 +95,9 @@ async def extract_from_text(
                 q["category"] = "其他"
 
     parsed = ExtractedPost.model_validate(args)
+    parsed.position_profiles = [validate_evidence(p, cleaned_text) for p in parsed.position_profiles]
+    if not parsed.position_profiles:
+        parsed.position_profiles = [PositionProfile()]
 
     if result.usage:
         await incr_tokens(

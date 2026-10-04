@@ -46,7 +46,7 @@ async def list_companies(
         sql = """
         SELECT c.id, c.canonical, c.industry, COUNT(DISTINCT pcp.post_id) AS n
         FROM companies c
-        LEFT JOIN post_company_position pcp ON pcp.company_id = c.id
+        LEFT JOIN post_companies pcp ON pcp.company_id = c.id
         GROUP BY c.id, c.canonical, c.industry
         ORDER BY n DESC, c.canonical
         LIMIT :limit OFFSET :offset

@@ -8,7 +8,8 @@ import { Loader2, BookOpen, CheckCircle, XCircle } from "lucide-react";
 import { QuestionCard } from "@/components/question-card";
 import { SearchBar } from "@/components/search-bar";
 import { BridgeModal, type AnswerItem } from "@/components/bridge-modal";
-import { fetcher, paths, bridge, type Question } from "@/lib/api";
+import { fetcher, paths, bridge, type Question, type PositionFacets } from "@/lib/api";
+import { EMPTY_FACETS, PositionFacetFilter } from "@/components/position-facets";
 
 export default function SearchPage() {
   return (
@@ -27,6 +28,11 @@ function SearchInner() {
   const [company, setCompany] = useState(search.get("company") ?? "");
   const [position, setPosition] = useState(search.get("position") ?? "");
   const [minQuality, setMinQuality] = useState(Number(search.get("min_quality")) || 0);
+  const [facets, setFacets] = useState<PositionFacets>({
+    ...EMPTY_FACETS, positionCategory: search.get("position_category"),
+    specializations: search.getAll("specializations"), domains: search.getAll("domains"),
+    skills: search.getAll("skills"), includeUnreviewed: search.get("include_unreviewed") === "true",
+  });
 
   // Mirror state -> URL
   useEffect(() => {
@@ -35,13 +41,18 @@ function SearchInner() {
     if (company) sp.set("company", company);
     if (position) sp.set("position", position);
     if (minQuality > 0) sp.set("min_quality", String(minQuality));
+    if (facets.positionCategory) sp.set("position_category", facets.positionCategory);
+    if (facets.includeUnreviewed) sp.set("include_unreviewed", "true");
+    for (const field of ["specializations", "domains", "skills"] as const) {
+      for (const value of facets[field]) sp.append(field, value);
+    }
     const qs = sp.toString();
     router.replace(`/search${qs ? "?" + qs : ""}` as Route, { scroll: false });
-  }, [submitted, company, position, minQuality, router]);
+  }, [submitted, company, position, minQuality, facets, router]);
 
   const url =
     submitted.trim().length >= 2
-      ? paths.search({ q: submitted, company, position, minQuality, limit: 30 })
+      ? paths.search({ q: submitted, company, position, minQuality, ...facets, limit: 30 })
       : null;
 
   const { data, error, isLoading } = useSWR<Question[]>(url, fetcher);
@@ -140,6 +151,7 @@ function SearchInner() {
       </div>
 
       {/* --- result toast --- */}
+      <PositionFacetFilter value={facets} onChange={setFacets} />
       {bridgeResult && (
         <div className="rise rise-2 flex items-center gap-3 rounded-sm border border-good/40 bg-good/10 px-5 py-3">
           <CheckCircle className="h-5 w-5 text-good" />

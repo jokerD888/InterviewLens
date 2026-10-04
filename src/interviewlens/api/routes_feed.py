@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..crawler.cleaner import strip_nowcoder_noise
+from ..position_taxonomy import TAXONOMY_VERSION, PositionCategory
 from ..scoring import freshness_case_sql
 from .deps import get_session
+from .position_filters import profile_predicate
 from .schemas import FeedQuestionOut, PostFeedItem
 
 router = APIRouter(tags=["feed"])
@@ -20,8 +23,13 @@ async def feed(
     company: str | None = None,
     position: str | None = None,
     category: str | None = None,
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    position_category: PositionCategory | None = None,
+    specializations: Annotated[list[str] | None, Query()] = None,
+    domains: Annotated[list[str] | None, Query()] = None,
+    skills: Annotated[list[str] | None, Query()] = None,
+    include_unreviewed: bool = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
     session: AsyncSession = Depends(get_session),
 ) -> list[PostFeedItem]:
     """Time-sorted post feed with optional company/position/category filters.
@@ -49,6 +57,10 @@ async def feed(
         clauses.append("p.category = :category")
         params["category"] = category
 
+    predicate = profile_predicate(position_category, specializations, domains, skills, include_unreviewed, params)
+    if predicate:
+        clauses.append(predicate)
+
     where = " AND ".join(clauses)
 
     freshness = freshness_case_sql()
@@ -64,9 +76,10 @@ async def feed(
            array_agg(DISTINCT q.round_type) FILTER (WHERE q.round_type IS NOT NULL) AS round_types,
            COUNT(DISTINCT q.id) FILTER (WHERE q.id IS NOT NULL) AS question_count
     FROM posts po
-    JOIN post_company_position pcp ON pcp.post_id = po.id
-    JOIN companies c ON c.id = pcp.company_id
-    JOIN positions p ON p.id = pcp.position_id
+    LEFT JOIN post_companies pc ON pc.post_id = po.id
+    LEFT JOIN companies c ON c.id = pc.company_id
+    LEFT JOIN post_company_position pcp ON pcp.post_id = po.id
+    LEFT JOIN positions p ON p.id = pcp.position_id
     LEFT JOIN questions q ON q.post_id = po.id
     WHERE {where}
     GROUP BY po.id
@@ -93,6 +106,14 @@ async def feed(
     for qr in q_rows:
         q_map[qr["post_id"]].append(FeedQuestionOut(**dict(qr)))
 
+    profile_rows = (await session.execute(sa_text("""
+        SELECT post_id,payload,origin FROM post_position_profiles
+        WHERE post_id = ANY(:post_ids) AND taxonomy_version=:version ORDER BY ordinal
+    """), {"post_ids": post_ids, "version": TAXONOMY_VERSION})).mappings().all()
+    profile_map: dict[int, list[dict]] = {pid: [] for pid in post_ids}
+    for profile_row in profile_rows:
+        profile_map[profile_row["post_id"]].append({**profile_row["payload"], "origin": profile_row["origin"]})
+
     def _excerpt(questions: list[FeedQuestionOut], cleaned: str | None, max_chars: int = 200) -> str | None:
         """Build excerpt from the first question, falling back to cleaned text."""
         if questions:
@@ -105,6 +126,7 @@ async def feed(
     return [
         PostFeedItem(
             id=r["id"],
+            position_profiles=profile_map[r["id"]],
             title=r["title"],
             source_url=r["source_url"],
             posted_at=r["posted_at"],

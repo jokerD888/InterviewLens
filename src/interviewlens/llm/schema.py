@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..position_taxonomy import PositionProfile, profile_tool_schema
+
 
 class Level(StrEnum):
     INTERN = "实习"
@@ -60,6 +62,7 @@ class ExtractedPost(BaseModel):
 
     companies: list[str] = Field(default_factory=list)
     positions: list[str] = Field(default_factory=list)
+    position_profiles: list[PositionProfile] = Field(default_factory=list)
     level: Level = Level.UNKNOWN
     interview_date: str | None = None  # YYYY-MM
     rounds: list[RoundItem] = Field(default_factory=list)
@@ -167,3 +170,10 @@ EXTRACT_FUNCTION_SCHEMA: dict = {
         },
     },
 }
+
+EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["properties"]["position_profiles"] = {
+    "type": "array",
+    "description": "每个面试岗位的四维分类及逐标签原文证据；不同岗位分开记录",
+    "items": profile_tool_schema(),
+}
+EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["required"].append("position_profiles")

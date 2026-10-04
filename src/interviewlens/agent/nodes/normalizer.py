@@ -11,6 +11,7 @@ from typing import Any
 import openai
 
 from ...db import replace_post_links, session_scope
+from ...db.position_profiles import save_post_companies
 from ...logging import log
 from ...normalizer import resolve_entity
 from ...observability import node_span
@@ -64,6 +65,7 @@ async def run(state: PipelineState, *, trace: Any | None = None) -> PipelineStat
         position_ids = list(dict.fromkeys(position_ids))
 
         async with session_scope() as session:
+            await save_post_companies(session, post_id, company_ids)
             n_links = await replace_post_links(
                 session,
                 post_id,

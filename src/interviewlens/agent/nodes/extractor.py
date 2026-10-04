@@ -5,8 +5,11 @@ import asyncio
 from typing import Any
 
 import openai
+from pydantic import ValidationError
 
+from ...crawler.cleaner import strip_nowcoder_noise
 from ...db import mark_extract_status, session_scope, set_interview_date
+from ...db.position_profiles import save_profiles
 from ...db.repositories import replace_questions
 from ...llm import extract_from_text, get_extractor_prompt_version
 from ...logging import log
@@ -23,7 +26,9 @@ async def run(
     trace: Any | None = None,
 ) -> PipelineState:
     post_id = state.get("post_id")
-    cleaned = state.get("cleaned_text") or ""
+    cleaned = strip_nowcoder_noise(state.get("cleaned_text") or "")
+    if state.get("title"):
+        cleaned = f"{state['title']}\n{cleaned}"
     log.info("node.start", node=NODE_NAME, post_id=post_id)
 
     async with node_span(
@@ -45,7 +50,7 @@ async def run(
             parsed, info = await extract_from_text(
                 cleaned, post_id=post_id, use_cache=use_cache, trace=trace
             )
-        except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
+        except (openai.APIError, asyncio.TimeoutError, RuntimeError, ValidationError) as exc:
             # Layer C: external LLM/JSON failure → mark post failed, skip;
             # logic bugs (TypeError/AttributeError) bubble up to the DLQ.
             log.error("node.extractor.failed", post_id=post_id, exc_info=True)
@@ -65,6 +70,7 @@ async def run(
         rounds_json = [r.model_dump() for r in parsed.rounds]
         async with session_scope() as session:
             inserted = await replace_questions(session, post_id, rounds_json)
+            await save_profiles(session, post_id, parsed.position_profiles, cleaned)
             await set_interview_date(session, post_id, parsed.interview_date)
             await mark_extract_status(
                 session,

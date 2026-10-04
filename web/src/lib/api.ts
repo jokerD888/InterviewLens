@@ -131,11 +131,44 @@ export type PostFeedItem = {
   interview_date: string | null;
   companies: string[];
   positions: string[];
+  position_profiles: PositionProfile[];
   cleaned_text: string | null;
   excerpt: string | null;
   round_types: string[];
   question_count: number;
   questions: FeedQuestion[];
+};
+
+export type PositionProfile = {
+  raw_title: string | null;
+  normalized_title: string | null;
+  category: string | null;
+  specializations: string[];
+  domains: string[];
+  skills: string[];
+  status: "classified" | "uncertain" | "out_of_scope";
+  source: "declared" | "inferred";
+  needs_review: boolean;
+  source_changed?: boolean;
+  origin?: string;
+  evidence: { field: string; value: string; quote: string; source: string }[];
+};
+
+export type PositionTaxonomy = {
+  version: number;
+  categories: string[];
+  specializations: string[];
+  domains: string[];
+  skills: string[];
+  counts: { category: string | null; posts: number; accepted_posts: number }[];
+};
+
+export type PositionFacets = {
+  positionCategory: string | null;
+  specializations: string[];
+  domains: string[];
+  skills: string[];
+  includeUnreviewed: boolean;
 };
 
 const API_PREFIX = "/api";
@@ -154,41 +187,57 @@ function qs(params: Record<string, string | number | null | undefined>): string 
  * touches. Each returns a path beginning with "/", suitable as an SWR key.
  */
 export const paths = {
+  positionTaxonomy: () => "/position-taxonomy",
+  positionProfiles: (id: number) => `/posts/${id}/position-profiles`,
   companies: () => `/companies${qs({ with_counts: "true", limit: 200 })}`,
   companyPositions: (id: number) => `/companies/${id}/positions`,
   positions: () => `/positions${qs({ with_counts: "true", limit: 500 })}`,
 
-  search: (p: {
+  search: (p: Partial<PositionFacets> & {
     q: string;
     company?: string | null;
     position?: string | null;
     minQuality?: number;
     limit?: number;
-  }) =>
-    `/posts/search${qs({
+  }) => {
+    const query = new URLSearchParams(qs({
       q: p.q,
       company: p.company,
       position: p.position,
+      position_category: p.positionCategory,
+      include_unreviewed: p.includeUnreviewed ? "true" : undefined,
       min_quality: p.minQuality && p.minQuality > 0 ? p.minQuality : undefined,
       limit: p.limit ?? 20,
-    })}`,
+    }).slice(1));
+    for (const field of ["specializations", "domains", "skills"] as const) {
+      for (const value of p[field] ?? []) query.append(field, value);
+    }
+    return `/posts/search?${query}`;
+  },
 
   post: (id: number) => `/posts/${id}`,
 
-  posts: (p?: {
+  posts: (p?: Partial<PositionFacets> & {
     company?: string | null;
     position?: string | null;
     category?: string | null;
     limit?: number;
     offset?: number;
-  }) =>
-    `/posts${qs({
+  }) => {
+    const query = new URLSearchParams(qs({
       company: p?.company,
       position: p?.position,
       category: p?.category,
+      position_category: p?.positionCategory,
+      include_unreviewed: p?.includeUnreviewed ? "true" : undefined,
       limit: p?.limit ?? 20,
       offset: p?.offset ?? 0,
-    })}`,
+    }).slice(1));
+    for (const field of ["specializations", "domains", "skills"] as const) {
+      for (const value of p?.[field] ?? []) query.append(field, value);
+    }
+    return `/posts?${query}`;
+  },
 
   summaries: (p?: { company?: string; position?: string; period?: string; limit?: number }) =>
     `/summaries${qs({

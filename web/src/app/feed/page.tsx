@@ -3,14 +3,14 @@
 import { useState, useEffect, useRef } from "react";
 import useSWRInfinite from "swr/infinite";
 import { Loader2 } from "lucide-react";
-import { fetcher, paths, type PostFeedItem } from "@/lib/api";
+import { fetcher, paths, type PostFeedItem, type PositionFacets } from "@/lib/api";
+import { EMPTY_FACETS } from "@/components/position-facets";
 import { FeedCard } from "@/components/feed-card";
 import { FeedFilterBar } from "@/components/feed-filter-bar";
 
 export default function FeedPage() {
   const [company, setCompany] = useState<string | null>(null);
-  const [position, setPosition] = useState<string | null>(null);
-  const [category, setCategory] = useState<string | null>(null);
+  const [facets, setFacets] = useState<PositionFacets>({ ...EMPTY_FACETS });
 
   const PAGE_SIZE = 20;
 
@@ -18,8 +18,7 @@ export default function FeedPage() {
     if (previousPageData && previousPageData.length < PAGE_SIZE) return null;
     return paths.posts({
       company,
-      position,
-      category,
+      ...facets,
       limit: PAGE_SIZE,
       offset: pageIndex * PAGE_SIZE,
     });
@@ -38,7 +37,7 @@ export default function FeedPage() {
   // Reset size when filters change
   useEffect(() => {
     setSize(1);
-  }, [company, position, category, setSize]);
+  }, [company, facets, setSize]);
 
   // Infinite scroll sentinel
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -70,11 +69,9 @@ export default function FeedPage() {
 
       <FeedFilterBar
         company={company}
-        position={position}
-        category={category}
+        facets={facets}
         onCompanyChange={setCompany}
-        onPositionChange={setPosition}
-        onCategoryChange={setCategory}
+        onFacetsChange={setFacets}
       />
 
       {error && (

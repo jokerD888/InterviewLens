@@ -10,6 +10,7 @@ import type { Route } from "next";
 import useSWR from "swr";
 import { CompanyList } from "@/components/company-list";
 import { PositionFilter } from "@/components/position-filter";
+import { PositionBrowser } from "@/components/position-browser";
 import { SummaryView } from "@/components/summary-view";
 import { fetcher, paths, type Company, type Summary } from "@/lib/api";
 
@@ -34,6 +35,7 @@ export function BrowserShell({
   const [companyName, setCompanyName] = useState<string | null>(initialCompany);
   const [positionName, setPositionName] = useState<string | null>(initialPosition);
   const [period, setPeriod] = useState<string>(initialPeriod);
+  const [browseMode, setBrowseMode] = useState(!initialPosition);
 
   // Sync state -> URL (replace avoids history pollution)
   useEffect(() => {
@@ -87,6 +89,11 @@ export function BrowserShell({
 
       {/* ── Main column: positions + summary OR recent index ───────── */}
       <section className="rise rise-2 col-span-12 space-y-5 lg:col-span-9">
+        <div className="flex gap-4 text-sm">
+          <button aria-pressed={browseMode} className="underline" onClick={() => { setBrowseMode(true); setPositionName(null); }}>按方向浏览</button>
+          <button aria-pressed={!browseMode} className="underline" onClick={() => setBrowseMode(false)}>原始岗位摘要</button>
+        </div>
+        {browseMode ? <PositionBrowser key={companyName ?? "all"} company={companyName} /> : <>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink/30 pb-3">
           <PositionFilter companyId={companyId} selected={positionName} onSelect={setPositionName} />
           <PeriodPicker value={period} onChange={setPeriod} />
@@ -105,6 +112,7 @@ export function BrowserShell({
             }}
           />
         )}
+        </>}
       </section>
     </div>
   );

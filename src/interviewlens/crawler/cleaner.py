@@ -85,12 +85,23 @@ def strip_nowcoder_noise(text: str) -> str:
     if not text:
         return text
 
+    # Browser innerText may flatten the entire footer onto one long line.
+    # Require compound UI markers rather than words such as "推荐" or "设计".
+    flattened_footer = re.search(
+        r"快捷表情\s*\ufeff?\s*首次评论必得\d*牛币|[ \t]{3,}一键发评(?=\s|$)", text
+    )
+    if flattened_footer:
+        text = text[:flattened_footer.start()]
+
     lines = text.splitlines()
 
     # Phase 1: find the comment-section marker and truncate
     cutoff = len(lines)
     for i, line in enumerate(lines):
         stripped = line.strip()
+        if stripped in {"同时转发到我的动态", "全部评论", "暂无评论，抢首评", "一键发评", "快捷表情"} or re.fullmatch(r"评论(?:\s+\d+){1,3}\s*(?:真题解析)?", stripped):
+            cutoff = i
+            break
         # Skip very short lines — the marker is a specific action-bar pattern
         if len(stripped) < 4:
             continue

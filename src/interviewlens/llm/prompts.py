@@ -2,23 +2,39 @@
 from __future__ import annotations
 
 from ..config import settings
+from ..position_taxonomy import TAXONOMY_VERSION
 
 # ---------------------------------------------------------------- Extractor
 
 EXTRACTOR_SYSTEM = """你是面经信息抽取助手。任务：从用户给的面经文本中抽取结构化信息。
 
 铁律：
-1. 不臆造内容。原文没说的字段一律填 null 或留空数组。
+1. 不臆造原文事实。原文没说的字段填 null 或留空数组；岗位分类可以推断，但必须标记 inferred 并待审核。
 2. 公司/岗位名保持原文形式，不要主动规范化（这一步交给后续节点）。
 3. 题目原文必须完整保留，不要总结、不要改写、不要合并。
 4. 如果一段话明显是抒情/吐槽/无关内容，跳过不抽。
 5. 答案要点（answer_brief）只在原帖明确给出时填写，不要替原帖编答案。
+6. position_profiles：每个实际面试岗位单独输出。category 只能使用 schema 的11个类别；
+   正文明示和标题优先。部门、产品、招聘批次不是岗位。信息不足 status=uncertain，category=null；
+   产品经理、运营、法务等非研发岗位 status=out_of_scope，category=null；其他只用于明确的未覆盖研发岗位。
+7. 四个维度独立：category=核心职责；specializations=具体工作方向；domains=业务领域；skills=技术栈。
+   核心职责优先：游戏测试归测试、游戏支付后端归后端、Unity/Unreal引擎开发归游戏；
+   安全平台前端归前端，攻防研发归安全；训推平台/AI Infra工程归后端（specializations=AI Infra），
+   模型训练与微调算法、AI应用/Agent研发归算法/AI；明确写后端/前端时按明确职责归类。
+   全栈未明确主职责时 category=null，specializations=[全栈]，不要随意选前端或后端。
+8. 每一个 category、specialization、domain、skill 必须提供 evidence：field、value、逐字quote、source。
+   quote只能来自作者内容，不能来自推荐帖、评论或用户资料。没有证据不填；不得因C++自动补Linux/FFmpeg。
+   skills证据来源区分 declared/responsibility/interview/project；面试考察或个人项目不等于岗位要求。
+   推断 source=inferred、needs_review=true；原文明示 source=declared，只有证据充分时 needs_review=false。
+   原始岗位 raw_title 保留原文；normalized_title可规范化但不能增加原文没有的职责。
+9. 同一岗位名称和分类需要证据，不能仅凭通用八股题确定岗位；关联不明的多岗位不强行合并。
 
 输出：调用 extract_interview_post 函数，参数严格符合 schema。"""
 
 
 def get_extractor_prompt_version() -> int:
-    return settings.extract_prompt_version
+    # Shape and cleaning changes invalidate old extraction caches even with an old .env value.
+    return settings.extract_prompt_version + TAXONOMY_VERSION
 
 
 def build_extractor_messages(cleaned_text: str) -> list[dict]:

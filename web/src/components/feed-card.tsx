@@ -24,7 +24,7 @@ export function FeedCard({ post }: Props) {
               {c}
             </span>
           ))}
-          {post.positions.slice(0, 3).map((p) => (
+          {!post.position_profiles?.length && post.positions.slice(0, 3).map((p) => (
             <span key={p} className="text-ink/60">
               {p}
             </span>
@@ -35,6 +35,16 @@ export function FeedCard({ post }: Props) {
         </div>
 
         {/* Round types */}
+        {post.position_profiles?.map((profile, index) => (
+          <div key={index} className="mb-2 text-xs text-muted">
+            <span className="text-ink">{profile.category ?? (profile.status === "out_of_scope" ? "非研发岗位" : "岗位未明确")}</span>
+            {profile.needs_review && <span className="ml-2 text-warn">待审核</span>}
+            {profile.source_changed && <span className="ml-2 text-warn">原文已变化</span>}
+            {profile.source === "inferred" && <span className="ml-2">内容推断</span>}
+            {profile.specializations.length > 0 && <span className="ml-2">方向：{profile.specializations.join(" / ")}</span>}
+            {profile.domains.length > 0 && <span className="ml-2">业务：{profile.domains.join(" / ")}</span>}
+          </div>
+        ))}
         {post.round_types.length > 0 && (
           <div className="mb-1 flex flex-wrap gap-1 text-[11px] text-muted">
             {post.round_types.map((r) => (
@@ -75,6 +85,19 @@ export function FeedCard({ post }: Props) {
         {/* Expanded body */}
         {open && (
           <div className="mt-4 space-y-5 border-t border-border/60 pt-4">
+            {post.position_profiles?.map((profile, index) => (
+              <section key={index} className="text-sm text-muted">
+                <h4 className="mb-2 text-ink">岗位分类证据{profile.origin === "historical_preview" ? "（历史映射预览）" : ""}</h4>
+                <p>原始名称：{profile.raw_title ?? "原文未明确"}</p>
+                {profile.normalized_title && <p>规范名称：{profile.normalized_title}</p>}
+                {profile.skills.length > 0 && <p>技术栈：{profile.skills.join(" / ")}</p>}
+                <ul className="mt-2 space-y-1">
+                  {profile.evidence.map((evidence, n) => (
+                    <li key={n}>{evidence.value} · {({ declared: "原文明示", responsibility: "职责描述", interview: "面试考察", project: "个人项目", inferred: "内容推断" } as Record<string, string>)[evidence.source] ?? evidence.source}：{evidence.quote}</li>
+                  ))}
+                </ul>
+              </section>
+            ))}
             {post.questions.length > 0 && (
               <section>
                 <h4 className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">
