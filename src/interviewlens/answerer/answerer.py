@@ -20,7 +20,7 @@ from ..llm.cache import cache_get, cache_set, make_cache_key
 from ..llm.deepseek import get_client
 from ..llm.prompts import build_answerer_messages
 from ..logging import log
-from ..observability import incr_tokens
+from ..observability import get_langfuse, incr_tokens
 
 ANSWER_NAMESPACE = "answer"
 CONCURRENCY = 100
@@ -49,6 +49,24 @@ async def generate_one(
         return cached["answer"]
 
     messages = build_answerer_messages(content=content, category=category)
+    own_client = None
+    generation = None
+    with swallow("answer.trace_create_failed"):
+        if trace is None:
+            own_client = get_langfuse()
+            if own_client is not None:
+                trace = own_client.trace(
+                    name="answerer",
+                    metadata={
+                        "prompt_version": settings.answer_prompt_version,
+                    },
+                )
+        if trace is not None:
+            generation = trace.generation(
+                name="answerer.answer",
+                model=settings.deepseek_model_chat,
+                input=messages,
+            )
     try:
         client = get_client()
         resp = await client.chat.completions.create(
@@ -56,10 +74,17 @@ async def generate_one(
             messages=messages,  # type: ignore[arg-type]
             temperature=0.3,
             max_tokens=MAX_TOKENS,
+            extra_body={"thinking": {"type": "disabled"}},
         )
-    except (openai.APIError, asyncio.TimeoutError) as exc:
+    except (openai.APIError, TimeoutError) as exc:
         # Layer C: external LLM failure degrades to None; logic bugs bubble.
         log.error("answer.llm_failed", exc_info=True)
+        if generation is not None:
+            with swallow("answer.trace_record_failed"):
+                generation.end(level="ERROR", status_message=type(exc).__name__)
+        if own_client is not None:
+            with swallow("answer.trace_flush_failed"):
+                await asyncio.to_thread(own_client.flush)
         return None
 
     answer = (resp.choices[0].message.content or "").strip()
@@ -69,15 +94,17 @@ async def generate_one(
             prompt=int(usage.get("prompt_tokens") or 0),
             completion=int(usage.get("completion_tokens") or 0),
         )
-    if trace is not None:
+    if generation is not None:
         with swallow("answer.trace_record_failed"):  # Layer A
-            trace.generation(
-                name="answerer.answer",
-                model=settings.deepseek_model_chat,
-                input=messages,
-                output=answer,
-                usage=usage,
-            ).end()
+            if answer:
+                generation.end(output=answer, usage=usage)
+            else:
+                generation.end(
+                    output=answer, usage=usage, level="ERROR", status_message="Empty answer",
+                )
+    if own_client is not None:
+        with swallow("answer.trace_flush_failed"):
+            await asyncio.to_thread(own_client.flush)
 
     if answer:
         await cache_set(key, {"answer": answer})

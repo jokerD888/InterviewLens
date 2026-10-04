@@ -82,7 +82,7 @@ class BackgroundLoopWorker:
 @worker_process_init.connect
 def _reset_worker_loop_and_db(**kwargs: Any) -> None:
     """Reset worker state after Celery prefork child process initialization."""
-    from ..db import reset_engine
+    from ..db.session import reset_engine
     reset_engine()
     BackgroundLoopWorker._instance = None
 
