@@ -118,11 +118,12 @@ async def search(
       1. query embedding  — 24h, shared across filters
       2. full result      — 30min, keyed on query + filters
     """
+    limit_val = getattr(limit, "default", 20) if not isinstance(limit, int) else int(limit)
     filters = {
         "company": company,
         "position": position,
         "min_quality": min_quality,
-        "limit": limit,
+        "limit": limit_val,
     }
 
     if settings.search_cache_enabled:
@@ -158,7 +159,7 @@ async def search(
         "q.embedding_version = :embedding_version",
     ]
     params: dict[str, object] = {
-        "limit": limit,
+        "limit": limit_val,
         "vec": vec_str,
         "min_q": min_quality,
         "as_of": datetime.now(timezone.utc),
@@ -167,18 +168,22 @@ async def search(
     }
     joins = "JOIN posts po ON po.id = q.post_id"
     if company:
-        joins += (
-            " JOIN post_company_position pcp_c ON pcp_c.post_id = po.id"
-            " JOIN companies c ON c.id = pcp_c.company_id"
+        clauses.append(
+            "EXISTS ("
+            "SELECT 1 FROM post_company_position pcp_c "
+            "JOIN companies c ON c.id = pcp_c.company_id "
+            "WHERE pcp_c.post_id = po.id AND c.canonical = :company"
+            ")"
         )
-        clauses.append("c.canonical = :company")
         params["company"] = company
     if position:
-        joins += (
-            " JOIN post_company_position pcp_p ON pcp_p.post_id = po.id"
-            " JOIN positions p ON p.id = pcp_p.position_id"
+        clauses.append(
+            "EXISTS ("
+            "SELECT 1 FROM post_company_position pcp_p "
+            "JOIN positions p ON p.id = pcp_p.position_id "
+            "WHERE pcp_p.post_id = po.id AND p.canonical = :position"
+            ")"
         )
-        clauses.append("p.canonical = :position")
         params["position"] = position
     if min_quality > 0:
         clauses.append("COALESCE(po.content_score, 0) >= :min_q")
