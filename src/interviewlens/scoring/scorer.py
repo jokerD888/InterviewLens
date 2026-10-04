@@ -179,11 +179,14 @@ def score_extracted(
 
 def freshness_case_sql(*, posted_at_sql: str = "po.posted_at", as_of_param: str = ":as_of") -> str:
     """Return the PostgreSQL CASE expression used by dynamic ranking queries."""
+    # An untyped bind parameter minus an interval can be inferred as another
+    # interval by PostgreSQL. Give the reference time its intended type.
+    as_of_sql = f"CAST({as_of_param} AS TIMESTAMP WITH TIME ZONE)"
     return f"""CASE
         WHEN {posted_at_sql} IS NULL THEN 0
-        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '90 days' THEN 30
-        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '180 days' THEN 25
-        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '360 days' THEN 15
-        WHEN {posted_at_sql} >= {as_of_param} - INTERVAL '720 days' THEN 8
+        WHEN {posted_at_sql} >= {as_of_sql} - INTERVAL '90 days' THEN 30
+        WHEN {posted_at_sql} >= {as_of_sql} - INTERVAL '180 days' THEN 25
+        WHEN {posted_at_sql} >= {as_of_sql} - INTERVAL '360 days' THEN 15
+        WHEN {posted_at_sql} >= {as_of_sql} - INTERVAL '720 days' THEN 8
         ELSE 0
     END"""
