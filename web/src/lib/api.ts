@@ -156,7 +156,7 @@ function qs(params: Record<string, string | number | null | undefined>): string 
 export const paths = {
   companies: () => `/companies${qs({ with_counts: "true", limit: 200 })}`,
   companyPositions: (id: number) => `/companies/${id}/positions`,
-  positions: () => `/positions${qs({ with_counts: "true", limit: 200 })}`,
+  positions: () => `/positions${qs({ with_counts: "true", limit: 500 })}`,
 
   search: (p: {
     q: string;

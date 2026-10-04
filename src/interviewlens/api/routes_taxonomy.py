@@ -65,7 +65,7 @@ async def list_companies(
         out = [CompanyOut(id=c.id, canonical=c.canonical, industry=c.industry) for c in rows]
 
     if settings.search_cache_enabled:
-        await cache_json_set(key, [o.model_dump() for o in out], ttl_seconds=_TAXONOMY_TTL)
+        await cache_json_set(key, [o.model_dump(mode="json") for o in out], ttl_seconds=_TAXONOMY_TTL)
     return out
 
 
@@ -98,7 +98,7 @@ async def list_company_positions(
     out = [CompanyPositionStat(**dict(r)) for r in rows]
 
     if settings.search_cache_enabled:
-        await cache_json_set(key, [o.model_dump() for o in out], ttl_seconds=_TAXONOMY_TTL)
+        await cache_json_set(key, [o.model_dump(mode="json") for o in out], ttl_seconds=_TAXONOMY_TTL)
     return out
 
 
@@ -140,5 +140,5 @@ async def list_positions(
         out = [PositionOut(id=p.id, canonical=p.canonical, category=p.category) for p in rows]
 
     if settings.search_cache_enabled:
-        await cache_json_set(key, [o.model_dump() for o in out], ttl_seconds=_TAXONOMY_TTL)
+        await cache_json_set(key, [o.model_dump(mode="json") for o in out], ttl_seconds=_TAXONOMY_TTL)
     return out
