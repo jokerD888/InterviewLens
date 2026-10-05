@@ -15,6 +15,7 @@ from .routes_admin import router as admin_router
 from .routes_bridge import router as bridge_router
 from .routes_feed import router as feed_router
 from .routes_position_profiles import router as profiles_router
+from .routes_position_editor import router as position_editor_router
 from .routes_search import router as search_router
 from .routes_summary import router as summary_router
 from .routes_taxonomy import router as taxonomy_router
@@ -52,6 +53,7 @@ app.add_middleware(
 app.include_router(feed_router)
 app.include_router(taxonomy_router)
 app.include_router(profiles_router)
+app.include_router(position_editor_router)
 app.include_router(search_router)
 app.include_router(summary_router)
 app.include_router(bridge_router)

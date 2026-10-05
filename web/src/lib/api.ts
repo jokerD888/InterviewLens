@@ -168,7 +168,6 @@ export type PositionFacets = {
   specializations: string[];
   domains: string[];
   skills: string[];
-  includeUnreviewed: boolean;
 };
 
 const API_PREFIX = "/api";
@@ -205,7 +204,6 @@ export const paths = {
       company: p.company,
       position: p.position,
       position_category: p.positionCategory,
-      include_unreviewed: p.includeUnreviewed ? "true" : undefined,
       min_quality: p.minQuality && p.minQuality > 0 ? p.minQuality : undefined,
       limit: p.limit ?? 20,
     }).slice(1));
@@ -229,7 +227,6 @@ export const paths = {
       position: p?.position,
       category: p?.category,
       position_category: p?.positionCategory,
-      include_unreviewed: p?.includeUnreviewed ? "true" : undefined,
       limit: p?.limit ?? 20,
       offset: p?.offset ?? 0,
     }).slice(1));
@@ -253,6 +250,8 @@ export const paths = {
     `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}/questions${qs({ period })}`,
 
   health: () => `/admin/health`,
+  positionPosts: (q = "") => `/admin/position-posts${qs({ q })}`,
+  positionEditor: (id: number) => `/admin/posts/${id}/position-profiles`,
   jobs: () => `/admin/jobs`,
   metrics: () => `/admin/metrics`,
   dlq: (taskName: string, limit = 50) => `/admin/dlq/${encodeURIComponent(taskName)}${qs({ limit })}`,
@@ -269,6 +268,10 @@ export const fetcher = <T>(path: string) => http<T>(path);
 
 /** Mutations (not cached). Used by the admin console. */
 export const mutate = {
+  positionProfiles: (postId: number, body: { revision: string; profiles: Pick<PositionProfile, "category" | "specializations" | "domains" | "skills">[] }) =>
+    http<PositionEditorState>(`/admin/posts/${postId}/position-profiles`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }),
   ingest: (url: string) =>
     http<{ ok: boolean; task_id?: string; url?: string; error?: string }>(`/admin/ingest`, {
       method: "POST",
@@ -282,6 +285,8 @@ export const mutate = {
 };
 
 /** Bridge API — export questions to daily-interview-prep. */
+export type PositionEditorState = { post_id: number; title: string | null; revision: string; profiles: PositionProfile[] };
+
 export const bridge = {
   generateAnswers: (questionIds: number[]) =>
     http<BridgeGenerateResponse>(`/bridge/generate-answers`, {

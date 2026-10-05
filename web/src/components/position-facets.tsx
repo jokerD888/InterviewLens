@@ -5,7 +5,7 @@ import { fetcher, paths, type PositionFacets, type PositionTaxonomy } from "@/li
 import { cn } from "@/lib/cn";
 
 export const EMPTY_FACETS: PositionFacets = {
-  positionCategory: null, specializations: [], domains: [], skills: [], includeUnreviewed: false,
+  positionCategory: null, specializations: [], domains: [], skills: [],
 };
 
 export function PositionFacetFilter({ value, onChange }: {
@@ -14,7 +14,6 @@ export function PositionFacetFilter({ value, onChange }: {
   const { data, error, mutate } = useSWR<PositionTaxonomy>(paths.positionTaxonomy(), fetcher);
   if (error) return <p role="alert">岗位分类加载失败。<button onClick={() => void mutate()}>重试</button></p>;
   if (!data) return <p className="text-sm text-muted">加载岗位分类…</p>;
-  const reviewed = data.counts.reduce((sum, row) => sum + row.accepted_posts, 0);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1.5" aria-label="一级岗位分类">
@@ -44,16 +43,7 @@ export function PositionFacetFilter({ value, onChange }: {
           </details>
         ))}
       </div>
-      <div className="flex flex-wrap items-center gap-4 text-xs text-muted">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={value.includeUnreviewed}
-            onChange={(e) => onChange({ ...value, includeUnreviewed: e.target.checked })} />
-          包含待审核分类
-        </label>
-        <button type="button" className="underline" onClick={() => onChange({ ...EMPTY_FACETS })}>清空筛选</button>
-      </div>
-      {reviewed === 0 && <p className="text-xs text-muted">历史岗位映射仍待审核。按方向筛选时可勾选“包含待审核分类”查看预览。</p>}
-      <p className="text-xs text-muted">同一维度多选匹配任一项；不同维度同时满足。技术栈可来自面试考察，详情中可查看证据。</p>
+
     </div>
   );
 }

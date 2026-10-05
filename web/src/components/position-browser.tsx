@@ -16,7 +16,7 @@ export function PositionBrowser({ company }: { company: string | null }) {
       <div className="text-sm text-muted">{company ?? "全部公司"} · 面经帖子</div>
       {isLoading && <p>加载面经…</p>}
       {error && <p role="alert">面经加载失败，请稍后重试。</p>}
-      {!isLoading && !error && data?.length === 0 && <p>暂无匹配面经。历史映射可通过“包含待审核分类”查看。</p>}
+      {!isLoading && !error && data?.length === 0 && <p>暂无匹配面经。</p>}
       {data?.map((post) => <FeedCard key={post.id} post={post} />)}
       {data?.length === limit && limit < 100 && <button className="text-sm underline" onClick={() => setLimit(limit + 20)}>加载更多</button>}
       {limit === 100 && data?.length === 100 && <p className="text-xs text-muted">已显示前100篇；更多面经可在“最新面经”中浏览。</p>}

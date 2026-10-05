@@ -16,7 +16,7 @@ from interviewlens.position_taxonomy import preview_title
 @pytest.mark.skipif(
     os.environ.get("IL_TEST_TAXONOMY_DB") != "1", reason="requires migrated local database"
 )
-async def test_real_facets_apply_to_same_profile_and_exclude_unreviewed(monkeypatch):
+async def test_real_facets_and_manual_correction(monkeypatch):
     engine = create_async_engine(settings.database_url)
     try:
         async with engine.connect() as connection:
@@ -71,7 +71,7 @@ async def test_real_facets_apply_to_same_profile_and_exclude_unreviewed(monkeypa
                     row[0]
                 ]
                 assert await search(PositionCategory.BACKEND, "Python", True) == []
-                assert await search(PositionCategory.BACKEND, "Java", False) == []
+                assert len(await search(PositionCategory.BACKEND, "Java", False)) == 1
                 result = await search(PositionCategory.AI, "Python", True)
                 assert len(result) == 1
                 assert len(result[0].position_profiles) == 2
@@ -133,7 +133,7 @@ async def test_real_facets_apply_to_same_profile_and_exclude_unreviewed(monkeypa
                 assert len(reviewed_result) == 1
                 assert reviewed_result[0].position_profiles[0].human_reviewed
                 await save_profiles(session, row[0], [profiles[1]], "Python算法工程师")
-                assert await search(PositionCategory.BACKEND, "Java", False) == []
+                assert len(await search(PositionCategory.BACKEND, "Java", False)) == 1
                 stale = await search(PositionCategory.BACKEND, "Java", True)
                 assert stale[0].position_profiles[0].source_changed
                 # Unknown legacy job must not hide a post or its company mentions.
@@ -146,6 +146,36 @@ async def test_real_facets_apply_to_same_profile_and_exclude_unreviewed(monkeypa
                 assert len(unknown_job) == 1
                 assert unknown_job[0].positions == []
                 assert "__taxonomy_integration__" in unknown_job[0].companies
+                # Admin correction persists, invalidates old facets and rejects stale edits.
+                from fastapi import HTTPException
+
+                from interviewlens.api.routes_position_editor import (
+                    Correction,
+                    correct_positions,
+                    editor_state,
+                )
+
+                _, author, editor = await editor_state(session, row[0])
+                body = Correction(
+                    revision=editor["revision"], profiles=[{"category": "前端", "skills": ["Vue"]}]
+                )
+                updated = await correct_positions(row[0], body, session)
+                assert updated["profiles"][0]["human_reviewed"]
+                assert updated["profiles"][0]["category"] == "前端"
+                assert await search(PositionCategory.BACKEND, "Java", False) == []
+                assert len(await search(PositionCategory.FRONTEND, "Vue", False)) == 1
+                with pytest.raises(HTTPException) as stale_edit:
+                    await correct_positions(row[0], body, session)
+                assert stale_edit.value.status_code == 409
+                bad = Correction(
+                    revision=updated["revision"],
+                    profiles=[{"category": "前端", "skills": ["基础架构"]}],
+                )
+                with pytest.raises(HTTPException) as invalid:
+                    await correct_positions(row[0], bad, session)
+                assert invalid.value.status_code == 422
+                await save_profiles(session, row[0], profiles, author)
+                assert (await editor_state(session, row[0]))[2]["profiles"][0]["category"] == "前端"
             finally:
                 await transaction.rollback()
                 await session.close()

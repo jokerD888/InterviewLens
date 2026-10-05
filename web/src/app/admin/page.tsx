@@ -12,6 +12,7 @@ import {
   type DlqList,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { PositionEditor } from "@/components/position-editor";
 
 type MetricsBody = {
   cache: { hits: number; misses: number; hit_rate: number };
@@ -84,7 +85,11 @@ export default function AdminPage() {
         )}
       </Section>
 
-      <Section title="LLM 指标" icon={<Gauge className="h-3.5 w-3.5" />} index="04">
+      <Section title="岗位分类管理" icon={<Inbox className="h-3.5 w-3.5" />} index="04">
+        <PositionEditor />
+      </Section>
+
+      <Section title="LLM 指标" icon={<Gauge className="h-3.5 w-3.5" />} index="05">
         {!metrics ? (
           <Skel />
         ) : (

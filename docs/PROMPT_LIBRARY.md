@@ -4,7 +4,7 @@
 
 ## 当前 Extractor 合同：四维岗位
 
-当前有效提取版本为配置的 `extract_prompt_version + TAXONOMY_VERSION`。除了原始 `positions`，工具要求返回 `position_profiles`：固定单选 `category`，以及分别受控的 `specializations`、`domains`、`skills`。每条标签记录原文证据与来源；推断结果待审核，无法确定的类别为空。模型不能创建一级类别，也不能声明人工审核通过。
+当前有效提取版本为配置的 `extract_prompt_version + TAXONOMY_VERSION`。除了原始 `positions`，工具要求返回 `position_profiles`：固定单选 `category`，以及分别受控的 `specializations`、`domains`、`skills`。每条标签记录原文证据与来源；分类直接使用，无法确定的类别为空，错误结果通过后台手动修正。旧审核字段仅作兼容元数据，模型不能创建一级类别或伪造人工修改标记。
 
 例如原文明示“C++后端基础架构工程师”时，类别为“后端”、方向为“基础架构”、技能为“C++”；不能凭这个名称补出 Redis、Linux 等未出现的技能。推荐帖和评论会在提取前剥离。岗位未明示时允许基于职责推断，但不凭语言名或通用算法题单独定类。
 

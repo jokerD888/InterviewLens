@@ -23,6 +23,5 @@ def profile_predicate(category, specializations, domains, skills, include_unrevi
             params[field] = list(dict.fromkeys(values))
     if not (category or specializations or domains or skills):
         return None
-    if not include_unreviewed:
-        clauses.append("NOT pp.needs_review")
+    # Legacy review flag is accepted for URL compatibility; all classifications are searchable.
     return "EXISTS (SELECT 1 FROM post_position_profiles pp WHERE " + " AND ".join(clauses) + ")"

@@ -26,7 +26,7 @@ export default function FeedPage() {
 
   const { data, size, setSize, isLoading, isValidating, error } = useSWRInfinite<
     PostFeedItem[]
-  >(getKey, fetcher, { revalidateFirstPage: false });
+  >(getKey, fetcher, { revalidateFirstPage: true });
 
   const posts = data ? data.flat() : [];
   const isReachingEnd = data && data.length > 0

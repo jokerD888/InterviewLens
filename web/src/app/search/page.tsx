@@ -31,7 +31,7 @@ function SearchInner() {
   const [facets, setFacets] = useState<PositionFacets>({
     ...EMPTY_FACETS, positionCategory: search.get("position_category"),
     specializations: search.getAll("specializations"), domains: search.getAll("domains"),
-    skills: search.getAll("skills"), includeUnreviewed: search.get("include_unreviewed") === "true",
+    skills: search.getAll("skills"),
   });
 
   // Mirror state -> URL
@@ -42,7 +42,6 @@ function SearchInner() {
     if (position) sp.set("position", position);
     if (minQuality > 0) sp.set("min_quality", String(minQuality));
     if (facets.positionCategory) sp.set("position_category", facets.positionCategory);
-    if (facets.includeUnreviewed) sp.set("include_unreviewed", "true");
     for (const field of ["specializations", "domains", "skills"] as const) {
       for (const value of facets[field]) sp.append(field, value);
     }
