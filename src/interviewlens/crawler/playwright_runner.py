@@ -53,6 +53,7 @@ class NowcoderFetcher:
         user_agent: str | None = None,
         headless: bool = True,
         timeout_ms: int = 30_000,
+        limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self._cookie_header = cookie_header if cookie_header is not None else settings.nowcoder_cookie
         self._user_agent = user_agent or settings.nowcoder_user_agent
@@ -62,7 +63,7 @@ class NowcoderFetcher:
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
-        self._limiter = AsyncRateLimiter(
+        self._limiter = limiter or AsyncRateLimiter(
             rate_per_sec=settings.crawler_rate_per_sec,
             jitter=(settings.crawler_jitter_min, settings.crawler_jitter_max),
         )

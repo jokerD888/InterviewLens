@@ -912,31 +912,86 @@ def aggregate(
     asyncio.run(_run())
 
 
+# --------------------------------------------------------- backfill-crawl
+@app.command(name="backfill-crawl")
+def backfill_crawl(
+    since: str = typer.Option(
+        "", help="Initial date YYYY-MM-DD (Beijing time); persisted for later batches"
+    ),
+    batch: int = typer.Option(30, min=1, max=30, help="Maximum detail attempts this batch"),
+    daily: int = typer.Option(100, min=1, max=100, help="Maximum detail attempts per Beijing day"),
+    resume_paused: bool = typer.Option(
+        False, "--resume-paused", help="Resume only after resolving login/rate-limit/challenge"
+    ),
+    retry_failed: bool = typer.Option(
+        False, "--retry-failed", help="Explicitly retry exhausted URLs; does not reset daily budget"
+    ),
+) -> None:
+    """Harvest one bounded batch; retain URL queue and cursor. Does not run AI."""
+    from .crawler.backfill import BackfillLimits, backfill_batch
+    from .crawler.tab_crawler import UTC8
+
+    try:
+        boundary = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=UTC8) if since else None
+    except ValueError as exc:
+        raise typer.BadParameter("since must be YYYY-MM-DD") from exc
+    report = asyncio.run(
+        backfill_batch(
+            since=boundary,
+            limits=BackfillLimits(batch=batch, daily=daily),
+            resume_paused=resume_paused,
+            retry_failed=retry_failed,
+        )
+    )
+    console.print_json(json.dumps(report, default=str))
+    if report["status"] in ("paused", "stopped"):
+        raise typer.Exit(code=1)
+
+
+@app.command(name="backfill-status")
+def backfill_status() -> None:
+    """Read queue/cursor/budget state without making website requests."""
+    from .crawler.backfill_store import BackfillStore
+
+    async def read():
+        store = BackfillStore()
+        async with store.locked() as acquired:
+            if not acquired:
+                return {"status": "locked"}
+            return await store.snapshot()
+
+    console.print_json(json.dumps(asyncio.run(read()), default=str))
+
+
 # --------------------------------------------------------- tab-crawl
 @app.command(name="tab-crawl")
 def tab_crawl(
-    pages: int = typer.Option(10, help="How many API pages (0=unlimited for tab)"),
+    pages: int = typer.Option(3, help="API pages: tab export 1..3; joblist up to 100"),
     output: str = typer.Option("", help="Save results as JSON Lines to this path"),
     delay: float = typer.Option(1.5, help="Seconds between detail page requests"),
     source: str = typer.Option("tab", help="tab (default, 400 posts, discuss+moment) | joblist (2000 moment posts, faster)"),
     since: str = typer.Option("", help="Only posts on/after this date (YYYY-MM-DD), joblist only"),
-    save_db: bool = typer.Option(False, "--save-db", help="Also write posts to the database (for il resume)"),
+    save_db: bool = typer.Option(False, "--save-db", help="Deprecated; database harvesting uses backfill-crawl"),
 ) -> None:
-    """Crawl mianjing posts. Two modes:
+    """Export a limited sample of mianjing posts. Two modes:
 
-    --source tab (default): tab/content API, ~400 posts, discuss+moment posts,
-        visits detail pages for full content.  Ctrl+C safe.
+    --source tab (default): 1..3 list pages, at most 30 detail requests,
+        exports to file. Use backfill-crawl for database harvesting.
 
     --source joblist: job/list API, up to 2000 moment-type posts,
         full content inline (no detail pages → much faster).  Supports --since.
 
-    Add --save-db to write posts to PostgreSQL so il resume can process them.
+    --save-db is not supported by this export command.
 
     Examples:
-        il tab-crawl --pages 0 --output data/overnight.json --save-db
+        il tab-crawl --pages 2 --output data/sample.json
         il tab-crawl --source joblist --pages 100 --since 2026-01-01 --output data/deep.json
     """
     async def _run() -> None:
+        if save_db:
+            raise typer.BadParameter("Use backfill-crawl for restartable, budgeted database harvesting")
+        if source not in ("tab", "joblist"):
+            raise typer.BadParameter("source must be tab or joblist")
         if source == "joblist":
             from datetime import datetime
             from .crawler.job_list_crawler import crawl_job_list
@@ -949,6 +1004,8 @@ def tab_crawl(
             )
         else:
             from .crawler.tab_crawler import crawl_tab
+            if not 1 <= pages <= 3:
+                raise typer.BadParameter("Manual tab export supports 1..3 pages; use backfill-crawl for harvesting")
             results = await crawl_tab(
                 pages=pages,
                 output_path=output or None,
@@ -1152,17 +1209,14 @@ def show_summary(
 # ------------------------------------------------------------------- batch
 @app.command()
 def batch(
-    pages: int = typer.Option(10, help="How many tab/content API pages (0=unlimited)"),
+    pages: int = typer.Option(3, min=1, max=3, help="Manual export: 1..3 list pages, at most 30 details"),
     output: str = typer.Option("", help="Optional JSON Lines output path"),
     delay: float = typer.Option(1.5, help="Seconds between detail page requests"),
 ) -> None:
-    """Crawl mianjing posts from Nowcoder's tab/content API (no 2000 post limit).
-
-    Posts are written to disk in real-time — safe to Ctrl+C overnight.
-    --pages 0 means crawl until no more data.
+    """Export a small sample; use backfill-crawl for persistent database harvesting.
 
     Example:
-        il batch --pages 0 --output data/overnight.json
+        il batch --pages 2 --output data/sample.json
     """
     from .crawler.tab_crawler import crawl_tab
 

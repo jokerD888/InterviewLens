@@ -170,11 +170,15 @@ docker compose exec api uv run il normalize "字节" --type company
 ### 批量采集和恢复
 
 ```bash
-# 从列表页抓取，并把帖子写入数据库
-docker compose exec api uv run il tab-crawl --pages 2 --save-db
+# 先应用新增的补采队列迁移（现有数据库只需一次）
+# PowerShell: Get-Content sql/009_bounded_backfill.sql | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U il -d interviewlens
+
+# 一批最多请求 30 篇详情，每个北京时间自然日最多请求 100 篇详情
+docker compose exec api uv run il backfill-crawl --batch 30
+docker compose exec api uv run il backfill-status
 
 # 让 LangGraph 处理刚写入的 pending 帖子
-docker compose exec api uv run il resume
+docker compose exec api uv run il resume --limit 30
 
 # 查看或处理死信队列
 docker compose exec api uv run il dlq list
@@ -182,6 +186,8 @@ docker compose exec api uv run il dlq drain --limit 50
 ```
 
 如果需要 Celery 后台处理单个 URL，可以调用 `POST /admin/ingest`；批量任务和 DLQ 由 Worker 执行。
+
+补采会持久化 URL 队列和分页进度，至少间隔一小时才能启动下一批。详情请求失败也占用限额；403/429/登录验证会暂停，排除原因后才能显式使用 `--resume-paused`。补采不调用 LLM。旧 `tab-crawl --save-db` 和无限页模式已停用，手工文件导出限制为三页列表、三十篇详情。具体迁移、续跑与限制见 [分批补采说明](docs/bounded-backfill.md)。
 
 ### 向量搜索和聚合摘要
 

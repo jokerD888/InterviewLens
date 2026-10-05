@@ -3,13 +3,12 @@
 Endpoint: GET https://gw-c.nowcoder.com/api/sparta/home/tab/content
 Parameters: pageNo=N, categoryType=1, tabId=818 (backend)
 
-Unlike the job/list API (2000 post hard limit), this endpoint supports
-unlimited pagination. Each post's detail page is visited to extract
-full content and titles (especially for discuss-type posts where the
-API record has no title field).
+Each post's detail page is visited to extract full content and titles.
+Manual exports are capped at three list pages and thirty details; use
+backfill_batch for a persistent queue and date-aware harvesting.
 
 Usage:
-    il tab-crawl --pages 5 --output data/tab_crawl.json
+    il tab-crawl --pages 3 --output data/tab_crawl.json
 """
 from __future__ import annotations
 
@@ -27,6 +26,8 @@ from ..errors import swallow
 from ..logging import log
 from .cleaner import strip_nowcoder_noise
 from .playwright_runner import NowcoderFetcher
+from .rate_limit import AsyncRateLimiter
+from .response_guard import CrawlStoppedError, check_page, check_status, parse_records
 
 TAB_API = "https://gw-c.nowcoder.com/api/sparta/home/tab/content"
 UTC8 = timezone(timedelta(hours=8))
@@ -95,15 +96,18 @@ async def fetch_tab_page(page_no: int, fetcher: NowcoderFetcher) -> list[dict]:
     """Fetch one page of the tab/content API using browser cookies."""
     page = await fetcher._context.new_page()
     try:
+        await fetcher._limiter.acquire()
         url = f"{TAB_API}?pageNo={page_no}&categoryType=1&tabId=818"
-        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        check_status(response.status if response else 0)
         text = await page.evaluate("() => document.body.innerText")
+        check_page(page.url, await page.title(), text)
         data = json.loads(text)
-        return data.get("data", {}).get("records") or []
+        return parse_records(data)
     except (PlaywrightError, asyncio.TimeoutError, json.JSONDecodeError):
-        # Layer C: network/render/JSON failures → empty page; selector bugs bubble.
+        # Network/render/JSON failures stop this batch, preserving its cursor.
         log.warning("tab.page_fetch_failed", page_no=page_no, exc_info=True)
-        return []
+        raise CrawlStoppedError("list_request_failed", retryable=True) from None
     finally:
         await page.close()
 
@@ -117,8 +121,11 @@ async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, 
     """
     page = await fetcher._context.new_page()
     try:
-        await page.goto(detail_url, wait_until="domcontentloaded", timeout=20000)
+        await fetcher._limiter.acquire()
+        response = await page.goto(detail_url, wait_until="domcontentloaded", timeout=20000)
+        check_status(response.status if response else 0)
         await asyncio.sleep(2)
+        check_page(page.url, await page.title(), await page.evaluate("() => document.body.innerText"))
         content = await page.evaluate("""
             () => {
                 // 1. Try specific content containers (newest → oldest DOM pattern)
@@ -159,25 +166,25 @@ async def fetch_detail(fetcher: NowcoderFetcher, detail_url: str) -> tuple[str, 
                 return document.title;
             }
         """)
-        await page.close()
         # Strip residual Nowcoder UI noise (action bars, ads, etc.)
         content = strip_nowcoder_noise(content or "")
         return content, page_title or ""
     except (PlaywrightError, asyncio.TimeoutError):
-        # Layer C: render/network failures → empty; selector/AttributeError bubble.
+        # Network/render failures stop this batch; do not persist an empty detail.
         log.warning("tab.detail_fetch_failed", url=detail_url, exc_info=True)
-        return "", ""
+        raise CrawlStoppedError("detail_request_failed", retryable=True) from None
     finally:
         await page.close()
 
 
 async def crawl_tab(
     *,
-    pages: int = 5,
+    pages: int = 3,
     output_path: str | None = None,
     save_to_db: bool = False,
     delay: float = DEFAULT_DELAY,
     stop_when_seen: bool = False,
+    max_posts: int = 30,
 ) -> list[dict]:
     """Crawl posts from the tab/content API.
 
@@ -185,20 +192,22 @@ async def crawl_tab(
     so interrupted crawls don't lose data.  Ctrl+C safe.
 
     Args:
-        pages: max API pages to fetch (0 = unlimited until empty pages).
+        pages: max API pages to fetch (1..3); use backfill_batch for restartable harvesting.
         output_path: if set, writes each post as JSON Line immediately.
         save_to_db: if True, also persists posts to the PostgreSQL posts table.
         delay: seconds between detail page requests.
-        stop_when_seen: incremental watermark for daily updates. When True,
+        stop_when_seen: legacy manual-export optimization. When True,
             records whose URL already exists in the DB are dropped from the
             work-list, and discovery stops after 2 consecutive pages yield no
-            new posts. Because the tab API is newest-first, this catches up to
-            the previous run's high-water mark without a time cursor (robust to
-            Nowcoder's pinned/recommended reordering).
+            new posts. Do not use this optimization for historical backfill;
+            the persistent backfill queue does not stop at already-seen pages.
+        max_posts: maximum details per manual export (1..30).
 
     Returns:
         list of post dicts with full content.
     """
+    if not 1 <= pages <= 3 or not 1 <= max_posts <= 30 or delay < 0:
+        raise ValueError("manual tab crawl requires pages=1..3 and max_posts=1..30; use backfill_batch")
     all_records: list[dict] = []
     seen_ids: set[str] = set()
     page_no = 1
@@ -221,7 +230,9 @@ async def crawl_tab(
     fixed_titles = 0
 
     try:
-        async with NowcoderFetcher() as fetcher:
+        async with NowcoderFetcher(
+            limiter=AsyncRateLimiter(rate_per_sec=1 / 8, jitter=(1, 7))
+        ) as fetcher:
             # ── Phase 1: discover via tab/content API ──
             log.info("tab_crawler.discover_start", pages=pages if pages > 0 else "unlimited")
             empty_streak = 0
@@ -261,7 +272,7 @@ async def crawl_tab(
             log.info("tab_crawler.discovered", total=len(all_records))
 
             # ── Phase 2: fetch detail content (real-time write) ──
-            for i, rec in enumerate(all_records):
+            for i, rec in enumerate(all_records[:max_posts]):
                 detail_url = build_detail_url(rec)
                 content = ""
                 page_title = ""

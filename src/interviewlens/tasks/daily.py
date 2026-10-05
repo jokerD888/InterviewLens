@@ -35,16 +35,19 @@ async def daily_update(*, with_answers: bool = True) -> dict:
     try:
         from ..aggregator import aggregate_all
         from ..agent.recovery import resume_failed
-        from ..crawler.tab_crawler import crawl_tab
+        from ..crawler.backfill import backfill_batch
 
-        # 1. Incremental crawl — stop once we catch up to the DB high-water mark.
-        crawled = await crawl_tab(pages=0, save_to_db=True, stop_when_seen=True)
-        summary["crawled"] = len(crawled)
-        log.info("daily.crawled", n=len(crawled))
+        # 1. Share durable cursor, quotas and lock with manual backfill batches.
+        crawl = await backfill_batch()
+        summary["crawl"] = crawl
+        summary["crawled"] = crawl["saved"]
+        log.info("daily.crawled", **crawl)
+        if crawl["status"] != "complete":
+            return summary
 
         # 2. Extract/normalize/score every pending post from step 1.
-        #    limit is generous — a day's new posts should fit comfortably.
-        resumed = await resume_failed(statuses=("pending", "failed"), limit=500)
+        #    Bound extraction too; failed old work is retried explicitly via resume.
+        resumed = await resume_failed(statuses=("pending",), limit=30)
         summary["extracted"] = len(resumed)
         log.info("daily.extracted", n=len(resumed))
 
