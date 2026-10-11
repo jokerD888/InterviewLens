@@ -22,6 +22,7 @@ async def upsert_raw_post(
     url: str,
     title: str | None,
     raw_html: str,
+    posted_at: datetime | None = None,
 ) -> Post:
     """Insert a new Post or update raw_html on an existing one.
 
@@ -32,6 +33,7 @@ async def upsert_raw_post(
         source_url=url,
         title=title,
         raw_html=raw_html,
+        posted_at=posted_at,
         fetched_at=now,
         extract_status="pending",
         extract_version=0,
@@ -41,6 +43,7 @@ async def upsert_raw_post(
         set_={
             "title": func.coalesce(stmt.excluded.title, Post.title),
             "raw_html": stmt.excluded.raw_html,
+            "posted_at": func.coalesce(Post.posted_at, stmt.excluded.posted_at),
             "fetched_at": stmt.excluded.fetched_at,
             # Preserve successful extraction; retry incomplete/failed rows.
             "extract_status": case(

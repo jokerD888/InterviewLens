@@ -40,3 +40,17 @@ def test_extract_dedup() -> None:
     urls = _extract_urls(html, "https://www.nowcoder.com")
     # Both should collapse via the ?-strip guard
     assert urls.count("https://www.nowcoder.com/discuss/1") == 1
+
+
+async def test_legacy_listing_stops_repeated_html_pages():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import pytest
+
+    from interviewlens.crawler.discover import discover_from_listing
+    from interviewlens.crawler.response_guard import CrawlStoppedError
+    fetcher = SimpleNamespace(fetch=AsyncMock(return_value=SimpleNamespace(status=200, html=SAMPLE)))
+    with pytest.raises(CrawlStoppedError, match="pagination_repeated"):
+        await discover_from_listing(pages=5, fetcher=fetcher)
+    assert fetcher.fetch.await_count == 2

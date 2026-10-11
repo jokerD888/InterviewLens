@@ -912,12 +912,33 @@ def aggregate(
     asyncio.run(_run())
 
 
+@app.command(name="repair-post-dates")
+def repair_post_dates(
+    apply: bool = typer.Option(False, "--apply", help="Fill NULL dates and persist source evidence"),
+    fetch_missing: bool = typer.Option(False, "--fetch-missing", help="Use serial detail metadata requests"),
+    max_requests: int = typer.Option(30, min=1, max=150, help="Total metadata request budget this run"),
+) -> None:
+    """Preview/repair publication dates without changing content, questions or extraction status."""
+    from .crawler.date_repair import repair_dates
+    if fetch_missing and not apply:
+        raise typer.BadParameter("--fetch-missing requires --apply")
+    report = asyncio.run(repair_dates(apply=apply, fetch_missing=fetch_missing,
+        max_requests=max_requests,
+        progress=lambda item: print(json.dumps(item, default=str), flush=True)))
+    console.print_json(json.dumps(report, default=str))
+    if report["status"] in ("stopped", "locked"):
+        raise typer.Exit(code=1)
+
+
 # --------------------------------------------------------- backfill-crawl
 @app.command(name="backfill-crawl")
 def backfill_crawl(
     since: str = typer.Option(
         "", help="Initial date YYYY-MM-DD (Beijing time); persisted for later batches"
     ),
+    listing: str = typer.Option("tab", help="tab or job (current job taxonomy API)"),
+    job_id: int = typer.Option(-1, help="Current selector job ID; -1 is all jobs"),
+    job_level: int = typer.Option(1, min=1, max=3, help="Job taxonomy depth, not recruitment type"),
     batch: int = typer.Option(30, min=1, max=30, help="Maximum detail attempts this batch"),
     daily: int = typer.Option(100, min=1, max=100, help="Maximum detail attempts per Beijing day"),
     resume_paused: bool = typer.Option(
@@ -938,6 +959,7 @@ def backfill_crawl(
     report = asyncio.run(
         backfill_batch(
             since=boundary,
+            listing=listing, job_id=job_id, job_level=job_level,
             limits=BackfillLimits(batch=batch, daily=daily),
             resume_paused=resume_paused,
             retry_failed=retry_failed,
@@ -949,12 +971,18 @@ def backfill_crawl(
 
 
 @app.command(name="backfill-status")
-def backfill_status() -> None:
+def backfill_status(
+    listing: str = typer.Option("tab"), job_id: int = typer.Option(-1),
+    job_level: int = typer.Option(1, min=1, max=3),
+) -> None:
     """Read queue/cursor/budget state without making website requests."""
     from .crawler.backfill_store import BackfillStore
 
     async def read():
-        store = BackfillStore()
+        if listing not in ("tab", "job"):
+            raise typer.BadParameter("listing must be tab or job")
+        store = BackfillStore() if listing == "tab" else BackfillStore(
+            source=f"nowcoder-job-v2-{job_id}-{job_level}")
         async with store.locked() as acquired:
             if not acquired:
                 return {"status": "locked"}

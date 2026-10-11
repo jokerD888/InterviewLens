@@ -35,6 +35,7 @@ class FetchResult:
     status: int
     title: str | None
     html: str
+    published_ms: int | None = None
 
 
 class NowcoderFetcher:
@@ -79,6 +80,7 @@ class NowcoderFetcher:
         self._context = await self._browser.new_context(
             user_agent=self._user_agent,
             locale="zh-CN",
+            timezone_id="Asia/Shanghai",
             viewport={"width": 1366, "height": 900},
         )
         self._context.set_default_timeout(self._timeout_ms)
@@ -153,6 +155,8 @@ class NowcoderFetcher:
                 if h1 and len(h1.strip()) > 5:
                     title = h1.strip()
             final_url = page.url
+            from .metadata_api import fetch_publication
+            published_ms = await fetch_publication(final_url, self)
             log.info("fetch.done", url=url, final_url=final_url, status=status, bytes=len(html))
             return FetchResult(
                 url=url,
@@ -160,6 +164,7 @@ class NowcoderFetcher:
                 status=status,
                 title=title,
                 html=html,
+                published_ms=published_ms,
             )
         finally:
             await page.close()

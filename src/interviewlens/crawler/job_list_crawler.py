@@ -1,30 +1,27 @@
-"""Job-list API crawler: complement to tab_crawler for deeper historical posts.
+"""Job-list API export with current taxonomy parameters and repeated-page detection.
 
-Endpoint: POST https://gw-c.nowcoder.com/api/sparta/job-experience/experience/job/list
-
-Unlike tab/content (400 post cache, discuss+moment posts), this endpoint:
-- Returns up to 2000 moment-type posts (contentType=74 only)
-- Includes full content inline (no detail page visit needed → much faster)
-- Supports date filtering via posted_at
-
-Use as supplement when tab crawler's 400 posts aren't enough.
+Both discussions and moments are supported. Server totalPage is not proof
+that all those pages are accessible; repeated pages mean an incomplete scan.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 
+from ..config import settings
 from ..logging import log
+from .rate_limit import AsyncRateLimiter
+from .record_metadata import page_fingerprint, publication_ms
+from .response_guard import CrawlStoppedError, check_status, parse_records
 
 API_URL = "https://gw-c.nowcoder.com/api/sparta/job-experience/experience/job/list"
 UTC8 = timezone(timedelta(hours=8))
 DEFAULT_DELAY = 1.0
-MAX_PAGES = 100  # 2000 / 20 = 100 pages hard limit
+MAX_PAGES = 100  # Local request budget, not a claimed server hard limit
 
 HEADERS = {
     "content-type": "application/json",
@@ -47,21 +44,21 @@ def _format_ts(dt: datetime | None) -> str:
 
 def extract_post(record: dict) -> dict:
     """Extract post fields from a job/list API record."""
-    md = record.get("momentData") or {}
+    md = record.get("momentData") or record.get("contentData") or {}
     ub = record.get("userBrief") or {}
     fd = record.get("frequencyData") or {}
     extra = record.get("extraInfo") or {}
 
     content_type = record.get("contentType", 0)
     uuid = md.get("uuid", "")
-    content_id = extra.get("contentID_var") or str(md.get("id", ""))
+    content_id = record.get("contentId") or extra.get("contentID_var") or str(md.get("id", ""))
 
     if content_type == 74 and uuid:
         detail_url = f"https://www.nowcoder.com/feed/main/detail/{uuid}"
     else:
         detail_url = f"https://www.nowcoder.com/discuss/{content_id}"
 
-    created_ms = md.get("createdAt") or 0
+    created_ms = publication_ms(record) or 0
     posted_at = _parse_posted_at(created_ms)
 
     return {
@@ -91,11 +88,13 @@ async def crawl_job_list(
     since: datetime | None = None,
     until: datetime | None = None,
     delay: float = DEFAULT_DELAY,
+    job_id: int = -1,
+    job_level: int = 1,
 ) -> list[dict]:
     """Crawl posts from the job/list API (inline content, no detail page needed).
 
     Args:
-        pages: max pages (each = ~20 posts, max 100 = 2000 posts).
+        pages: maximum list requests; never interpreted as full-history coverage.
         output_path: if set, writes each post as JSON Line immediately (interrupt-safe).
         since/until: naive datetime range filter.
         delay: seconds between pages.
@@ -103,6 +102,11 @@ async def crawl_job_list(
     Returns:
         list of post dicts.
     """
+    if not 1 <= pages <= 500 or job_level not in (1, 2, 3):
+        raise ValueError("pages must be 1..500; job_level must be 1..3")
+    limiter = AsyncRateLimiter(rate_per_sec=1 / max(10.0, delay), jitter=(1, 10))
+    stop_reason = "page_budget"
+    fingerprints: set[str] = set()
     all_results: list[dict] = []
     seen_ids: set[str] = set()
 
@@ -121,48 +125,48 @@ async def crawl_job_list(
         out_file.flush()
 
     try:
-        empty_streak = 0
         page = 1
-        async with httpx.AsyncClient(timeout=30) as client:
+        headers = {**HEADERS, "user-agent": settings.nowcoder_user_agent}
+        if settings.nowcoder_cookie:
+            headers["cookie"] = settings.nowcoder_cookie
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             while page <= pages:
                 payload = {
                     "companyList": [],
-                    "jobId": 0,
-                    "level": 3,
+                    "jobId": job_id,
+                    "level": job_level,
                     "order": 3,
                     "page": page,
                     "isNewJob": True,
                 }
                 try:
-                    resp = await client.post(API_URL, headers=HEADERS, json=payload)
+                    await limiter.acquire()
+                    resp = await client.post(API_URL, json=payload)
+                    check_status(resp.status_code)
                     resp.raise_for_status()
                     data = resp.json()
                 except (httpx.HTTPError, json.JSONDecodeError):
                     # Layer B: network/HTTP/JSON failure → stop paging; logic bugs bubble.
                     log.error("job_list.request_failed", page=page, exc_info=True)
+                    stop_reason = "request_failed"
                     break
 
-                if not data.get("success") or data.get("code") != 0:
-                    log.warning("job_list.bad_response", page=page)
-                    break
-
-                records = data.get("data", {}).get("records", [])
+                records = parse_records(data)
                 if not records:
-                    log.info("job_list.empty_page", page=page)
+                    stop_reason = "empty_page"
                     break
-
-                # Check for early stop by date (newest-first ordering)
-                last_record = records[-1]
-                last_ts = (last_record.get("momentData") or {}).get("createdAt", 0)
-                if since and last_ts:
-                    last_dt = _parse_posted_at(last_ts)
-                    if last_dt and last_dt < since:
-                        log.info("job_list.since_reached", page=page, last_date=str(last_dt))
+                fingerprint = page_fingerprint(records)
+                if fingerprint and fingerprint in fingerprints:
+                    stop_reason = "pagination_repeated"
+                    log.warning("job_list.incomplete_scan", page=page, reason=stop_reason)
+                    break
+                if fingerprint:
+                    fingerprints.add(fingerprint)
 
                 new = 0
                 for rec in records:
-                    md = rec.get("momentData") or {}
-                    cid = str(md.get("id", ""))
+                    md = rec.get("momentData") or rec.get("contentData") or {}
+                    cid = extract_post(rec)["detail_url"]
                     if not cid or cid in seen_ids:
                         continue
                     content = (md.get("content") or "").strip()
@@ -173,7 +177,7 @@ async def crawl_job_list(
                         continue
 
                     # Date filter
-                    posted_at = _parse_posted_at(md.get("createdAt", 0))
+                    posted_at = _parse_posted_at(publication_ms(rec))
                     if posted_at:
                         if since and posted_at < since:
                             continue
@@ -191,23 +195,22 @@ async def crawl_job_list(
 
                 log.info("job_list.page", page=page, records=len(records), new=new, total=len(all_results))
 
-                if new == 0:
-                    empty_streak += 1
-                    if empty_streak >= 2:
-                        log.info("job_list.discovery_done", reason="no new records for 2 pages")
-                        break
-                else:
-                    empty_streak = 0
-
+                # Filtering a page outside until does not mean there are no
+                # older matches. Only raw page identities detect pagination loops.
                 page += 1
-                await asyncio.sleep(delay)
 
+    except CrawlStoppedError as exc:
+        stop_reason = exc.reason
+        raise
     except KeyboardInterrupt:
+        stop_reason = "interrupted"
         log.info("job_list.interrupted", saved=len(all_results))
     finally:
         if out_file:
             trailer = json.dumps({
                 "total": len(all_results),
+                "stop_reason": stop_reason,
+                "complete": stop_reason == "empty_page",
                 "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             }, ensure_ascii=False)
             out_file.write(trailer + "\n")

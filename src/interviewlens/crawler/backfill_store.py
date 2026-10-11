@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 
 from ..db.session import get_engine
+from .record_metadata import page_fingerprint, publication_datetime
+from .response_guard import CrawlStoppedError
 from .tab_crawler import build_detail_url
 
 SOURCE = "nowcoder-tab-818"
@@ -16,7 +18,8 @@ LOCK_KEY = 492041818
 
 
 class BackfillStore:
-    def __init__(self, engine=None, *, lock_key: int = LOCK_KEY):
+    def __init__(self, engine=None, *, lock_key: int = LOCK_KEY, source: str = SOURCE):
+        self.source = source
         self.engine = engine if engine is not None else get_engine()
         self.lock_key = lock_key
         self.connection = None
@@ -66,7 +69,7 @@ class BackfillStore:
                      - INTERVAL '7 days' FROM posts))
                 ON CONFLICT DO NOTHING
             """),
-                {"source": SOURCE, "since": since},
+                {"source": self.source, "since": since},
             )
             row = (
                 (
@@ -76,7 +79,7 @@ class BackfillStore:
                     last_batch_at + :cooldown * INTERVAL '1 second' > NOW()) AS cooling
                 FROM crawl_progress WHERE source=:source
             """),
-                        {"source": SOURCE, "cooldown": cooldown},
+                        {"source": self.source, "cooldown": cooldown},
                     )
                 )
                 .mappings()
@@ -95,7 +98,7 @@ class BackfillStore:
                 UPDATE crawl_progress SET last_batch_at=NOW(),paused_reason=NULL
                 WHERE source=:source
             """),
-                {"source": SOURCE},
+                {"source": self.source},
             )
             return "ready", dict(row)
 
@@ -109,7 +112,7 @@ class BackfillStore:
                 WHERE source=:source AND status='pending'
                 ORDER BY queued_at,url LIMIT :limit
             """),
-                        {"source": SOURCE, "limit": limit},
+                        {"source": self.source, "limit": limit},
                     )
                 )
                 .mappings()
@@ -119,12 +122,16 @@ class BackfillStore:
 
     async def start_scan(self):
         async with self.connection.begin():
+            await self.connection.execute(text("""
+                DELETE FROM crawl_scan_pages WHERE source=:source AND EXISTS(
+                    SELECT 1 FROM crawl_progress WHERE source=:source AND completed=TRUE)
+            """), {"source": self.source})
             await self.connection.execute(
                 text("""
                 UPDATE crawl_progress SET completed=FALSE,next_page=1
                 WHERE source=:source AND completed=TRUE
             """),
-                {"source": SOURCE},
+                {"source": self.source},
             )
             row = (
                 (
@@ -132,7 +139,7 @@ class BackfillStore:
                         text("""
                 SELECT next_page,since_at FROM crawl_progress WHERE source=:source
             """),
-                        {"source": SOURCE},
+                        {"source": self.source},
                     )
                 )
                 .mappings()
@@ -143,10 +150,28 @@ class BackfillStore:
     async def enqueue_page(self, records: list[dict], page: int, since: datetime):
 
         async with self.connection.begin():
+            fingerprint = page_fingerprint(records)
+            # Same page on a later run is intentional overlap; another page with
+            # identical identities signals a clamped/repeated server response.
+            repeated = await self.connection.execute(text("""
+                SELECT page FROM crawl_scan_pages
+                WHERE source=:source AND page<>:page AND fingerprint=:fingerprint
+                LIMIT 1
+            """), {"source": self.source, "page": page, "fingerprint": fingerprint})
+            if fingerprint and repeated.first():
+                raise CrawlStoppedError("pagination_repeated")
+            dates = [date for record in records if (date := publication_datetime(record))]
+            await self.connection.execute(text("""
+                INSERT INTO crawl_scan_pages(source,page,fingerprint,oldest_at,newest_at)
+                VALUES(:source,:page,:fingerprint,:oldest,:newest)
+                ON CONFLICT(source,page) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,
+                    oldest_at=EXCLUDED.oldest_at,newest_at=EXCLUDED.newest_at,scanned_at=NOW()
+            """), {"source": self.source, "page": page, "fingerprint": fingerprint,
+                   "oldest": min(dates) if dates else None, "newest": max(dates) if dates else None})
             for record in records:
                 url = build_detail_url(record)
-                timestamp = (record.get("momentData") or {}).get("createdAt")
-                if not url or (timestamp and datetime.fromtimestamp(timestamp / 1000, UTC) < since):
+                published = publication_datetime(record)
+                if not url or (published and published < since):
                     continue
                 await self.connection.execute(
                     text("""
@@ -155,19 +180,27 @@ class BackfillStore:
                     WHERE NOT EXISTS(SELECT 1 FROM posts WHERE source_url=:url)
                     ON CONFLICT(url) DO NOTHING
                 """),
-                    {"url": url, "source": SOURCE, "record": json.dumps(record)},
+                    {"url": url, "source": self.source, "record": json.dumps(record)},
                 )
             await self.connection.execute(
                 text("""
                 UPDATE crawl_progress SET next_page=GREATEST(next_page,:next),completed=:empty
                 WHERE source=:source
             """),
-                {"source": SOURCE, "next": page + 1, "empty": not records},
+                {"source": self.source, "next": page + 1, "empty": not records},
             )
 
     async def reserve_attempt(self, url: str, daily_limit: int):
         # Charge before navigation: failures and process crashes consume the budget too.
         async with self.connection.begin():
+            spent = (await self.connection.execute(text("""
+                SELECT COALESCE(SUM(detail_attempts),0) FROM crawl_daily_budget
+                WHERE day=(NOW() AT TIME ZONE 'Asia/Shanghai')::date
+            """))).scalar_one()
+            # All sources are under the same advisory lock. Partitioning the
+            # discovery feed must not multiply the application's daily quota.
+            if spent >= daily_limit:
+                return False
             charged = (
                 await self.connection.execute(
                     text("""
@@ -178,7 +211,7 @@ class BackfillStore:
                 WHERE crawl_daily_budget.detail_attempts < :limit
                 RETURNING detail_attempts
             """),
-                    {"source": SOURCE, "limit": daily_limit},
+                    {"source": self.source, "limit": daily_limit},
                 )
             ).first()
             if not charged:
@@ -199,7 +232,7 @@ class BackfillStore:
                 WHERE q.source=:source AND q.status='pending'
                 AND EXISTS(SELECT 1 FROM posts p WHERE p.source_url=q.url)
             """),
-                {"source": SOURCE},
+                {"source": self.source},
             )
             # Attempts already charged before a crashed navigation remain charged.
             await self.connection.execute(
@@ -207,7 +240,7 @@ class BackfillStore:
                 UPDATE crawl_queue SET status='failed',last_error=COALESCE(last_error,'attempts_exhausted')
                 WHERE source=:source AND status='pending' AND attempts>=3
             """),
-                {"source": SOURCE},
+                {"source": self.source},
             )
 
     async def retry_failed(self):
@@ -217,7 +250,7 @@ class BackfillStore:
                 UPDATE crawl_queue SET status='pending',attempts=0,last_error=NULL
                 WHERE source=:source AND status='failed'
             """),
-                {"source": SOURCE},
+                {"source": self.source},
             )
 
     async def finish(self, url: str, post: dict):
@@ -264,7 +297,7 @@ class BackfillStore:
                     text("""
                     UPDATE crawl_progress SET paused_reason=:reason WHERE source=:source
                 """),
-                    {"reason": reason, "source": SOURCE},
+                    {"reason": reason, "source": self.source},
                 )
 
     async def snapshot(self):
@@ -278,12 +311,12 @@ class BackfillStore:
                         AND q.status='pending') AS pending,
                     (SELECT COUNT(*) FROM crawl_queue q WHERE q.source=p.source
                         AND q.status='failed') AS failed,
-                    COALESCE((SELECT detail_attempts FROM crawl_daily_budget b
-                        WHERE b.source=p.source AND b.day=(NOW() AT TIME ZONE 'Asia/Shanghai')::date),0)
+                    COALESCE((SELECT SUM(detail_attempts) FROM crawl_daily_budget b
+                        WHERE b.day=(NOW() AT TIME ZONE 'Asia/Shanghai')::date),0)
                         AS today_attempts
                 FROM crawl_progress p WHERE source=:source
             """),
-                        {"source": SOURCE},
+                        {"source": self.source},
                     )
                 )
                 .mappings()

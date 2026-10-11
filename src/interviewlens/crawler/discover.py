@@ -16,6 +16,7 @@ import re
 from urllib.parse import urljoin
 
 from .playwright_runner import NowcoderFetcher
+from .response_guard import CrawlStoppedError, check_status
 
 DISCUSS_PATTERNS = [
     re.compile(r"https?://(?:www\.)?nowcoder\.com/discuss/(\d+)"),
@@ -39,6 +40,11 @@ def _extract_urls(html: str, base: str) -> list[str]:
             full = urljoin(base, "/discuss/" + url) if pat is DISCUSS_PATTERNS[0] else \
                    urljoin(base, "/feed/main/detail/" + url)
             found[full] = None
+    # JSON/script islands may contain quoted relative paths rather than href=.
+    for path in re.findall(
+        r"""["'](/(?:discuss/\d+|feed/main/detail/[\w-]+))(?:[?#][^"']*)?["']""", html
+    ):
+        found[urljoin(base, path)] = None
     return list(found.keys())
 
 
@@ -55,6 +61,8 @@ async def discover_from_listing(
       - "interview"    → /?type=818_1 (首页混流，含热榜)
     """
     own_fetcher = fetcher is None
+    if not 1 <= pages <= 500:
+        raise ValueError("pages must be 1..500")
     if own_fetcher:
         fetcher = NowcoderFetcher()
         await fetcher.start()
@@ -62,6 +70,7 @@ async def discover_from_listing(
 
     base = "https://www.nowcoder.com"
     urls: dict[str, None] = {}
+    seen_pages: set[frozenset[str]] = set()
     try:
         for page in range(1, pages + 1):
             if source == "interview":
@@ -69,7 +78,14 @@ async def discover_from_listing(
             else:
                 url = f"{base}/discuss?type=2&order=3&pageSize=30&page={page}"
             result = await fetcher.fetch(url)
-            for u in _extract_urls(result.html, base):
+            check_status(result.status)
+            discovered = _extract_urls(result.html, base)
+            identities = frozenset(discovered)
+            if identities and identities in seen_pages:
+                raise CrawlStoppedError("pagination_repeated")
+            if identities:
+                seen_pages.add(identities)
+            for u in discovered:
                 urls[u] = None
     finally:
         if own_fetcher:

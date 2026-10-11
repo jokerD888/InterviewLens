@@ -28,7 +28,15 @@ SINCE = datetime(2026, 7, 8, tzinfo=UTC)
 
 
 @pytest_asyncio.fixture
-async def engine():
+async def engine(monkeypatch):
+    original_init = BackfillStore.__init__
+    test_lock = int(uuid.uuid4().hex[:15], 16)
+
+    def isolated_init(self, *args, **kwargs):
+        kwargs.setdefault("lock_key", test_lock)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(BackfillStore, "__init__", isolated_init)
     dsn = os.environ["IL_TEST_BACKFILL_DSN"]
     schema = "test_backfill_" + uuid.uuid4().hex
     connection = await asyncpg.connect(dsn.replace("postgresql+asyncpg://", "postgresql://"))
@@ -42,6 +50,7 @@ async def engine():
         """)
         migration = Path(__file__).resolve().parents[1] / "sql/009_bounded_backfill.sql"
         await connection.execute(migration.read_text(encoding="utf-8"))
+        await connection.execute((migration.parent / "010_crawl_scan_audit.sql").read_text(encoding="utf-8"))
         pool = create_async_engine(dsn, connect_args={"server_settings": {"search_path": schema}})
         try:
             yield pool
@@ -76,7 +85,7 @@ async def release_cooldown(engine):
 
 
 async def test_restart_dedupe_and_newest_pages_do_not_end_history_scan(engine, monkeypatch):
-    scan = AsyncMock(side_effect=[[record(i) for i in range(1, 21)]] * 3)
+    scan = AsyncMock(side_effect=[[record(i) for i in range(start, 21)] for start in (1, 2, 3)])
     detail = AsyncMock(return_value=("Redis问题和完整正文", "面经"))
     monkeypatch.setattr(backfill, "fetch_tab_page", scan)
     monkeypatch.setattr(backfill, "fetch_detail", detail)
@@ -99,7 +108,7 @@ async def test_restart_dedupe_and_newest_pages_do_not_end_history_scan(engine, m
 
 
 async def test_daily_budget_counts_failed_requests_and_pause_survives_restart(engine, monkeypatch):
-    monkeypatch.setattr(backfill, "fetch_tab_page", AsyncMock(return_value=[record(1)]))
+    monkeypatch.setattr(backfill, "fetch_tab_page", AsyncMock(side_effect=[[record(1)], []]))
     detail = AsyncMock(side_effect=CrawlStoppedError("http_429"))
     monkeypatch.setattr(backfill, "fetch_detail", detail)
     first = await backfill.backfill_batch(
@@ -167,7 +176,7 @@ async def test_date_filter_unknown_dates_and_empty_page_completion(engine):
     async with store.locked():
         await store.begin_batch(SINCE, 3600, False)
         unknown = {"contentId": "unknown", "momentData": {}}
-        await store.enqueue_page([record(1, timestamp=1), record(2), unknown], 1, SINCE)
+        await store.enqueue_page([record(1, timestamp=int(SINCE.timestamp() * 1000) - 86400000), record(2), unknown], 1, SINCE)
         assert len(await store.pending(30)) == 2
         await store.enqueue_page([], 2, SINCE)
         assert (await store.snapshot())["completed"] is True
@@ -228,7 +237,7 @@ async def test_page_failure_rolls_back_queue_and_cursor_together(engine):
     async with store.locked():
         await store.begin_batch(SINCE, 3600, False)
         with pytest.raises(TypeError):
-            await store.enqueue_page([record(1), record(2, timestamp="invalid")], 1, SINCE)
+            await store.enqueue_page([record(1), record(2, timestamp=object())], 1, SINCE)
         state = await store.snapshot()
         assert state["pending"] == 0 and state["next_page"] == 1
 
@@ -273,3 +282,101 @@ async def test_cancel_between_lock_acquisition_and_commit_does_not_leak_lock(eng
         async with BackfillStore(engine).locked() as acquired:
             assert acquired
         assert held_connection is not None
+
+
+async def test_repeated_page_across_restart_pauses_without_cursor_advance(engine):
+    store = BackfillStore(engine)
+    async with store.locked():
+        await store.begin_batch(SINCE, 3600, False)
+        await store.enqueue_page([record(1), record(2)], 20, SINCE)
+    other = BackfillStore(engine)
+    async with other.locked():
+        # Reordered rows with changed counters are still the same server page.
+        with pytest.raises(CrawlStoppedError, match="pagination_repeated"):
+            await other.enqueue_page([record(2), record(1)], 21, SINCE)
+        state = await other.snapshot()
+        assert state["next_page"] == 21 and state["completed"] is False
+        # Intentional overlap of the same page is permitted.
+        await other.enqueue_page([record(2), record(1)], 20, SINCE)
+        await other.fail(None, "pagination_repeated", pause=True)
+        assert (await other.snapshot())["paused_reason"] == "pagination_repeated"
+
+
+async def test_date_repair_fills_only_null_and_is_idempotent(engine):
+    from interviewlens.crawler.date_repair import repair_dates
+    store = BackfillStore(engine)
+    async with store.locked():
+        await store.begin_batch(SINCE, 3600, False)
+        rec = {"contentId": "42", "contentData": {"createTime": int(SINCE.timestamp() * 1000)}}
+        await store.enqueue_page([rec], 1, SINCE)
+        async with store.connection.begin():
+            await store.connection.execute(text("""
+                INSERT INTO posts(source_url,title,raw_html,cleaned_text,extract_status)
+                VALUES('https://www.nowcoder.com/discuss/42','original','snapshot','body','done')
+            """))
+    preview = await repair_dates(engine=engine)
+    assert preview["candidates"] == 1 and preview["repaired"] == 0
+    repaired = await repair_dates(engine=engine, apply=True)
+    assert repaired["repaired"] == 1 and repaired["remaining_null"] == 0
+    assert (await repair_dates(engine=engine, apply=True))["repaired"] == 0
+    async with engine.connect() as connection:
+        row = (await connection.execute(text(
+            "SELECT title,raw_html,cleaned_text,extract_status,posted_at FROM posts"))).one()
+        assert tuple(row[:4]) == ('original', 'snapshot', 'body', 'done')
+        assert row.posted_at == SINCE
+        assert (await connection.execute(text("SELECT count(*) FROM crawl_date_repairs"))).scalar() == 1
+
+
+async def test_partitioned_sources_share_daily_request_budget(engine):
+    for index, source in enumerate((SOURCE, "nowcoder-job-v2-11200-2")):
+        store = BackfillStore(engine, source=source)
+        async with store.locked():
+            await store.begin_batch(SINCE, 3600, False)
+            await store.enqueue_page([record(index + 1)], 1, SINCE)
+            url = (await store.pending(1))[0]["url"]
+            assert await store.reserve_attempt(url, 1) is (index == 0)
+            assert (await store.snapshot())["today_attempts"] == 1
+
+
+async def test_date_repair_skips_private_posts_and_never_retries_them(engine):
+    import httpx
+    from interviewlens.crawler.date_repair import repair_dates
+    async with engine.begin() as connection:
+        await connection.execute(text("""
+            INSERT INTO posts(source_url,title) VALUES
+                ('https://www.nowcoder.com/discuss/42','private'),
+                ('https://www.nowcoder.com/discuss/43','public')
+        """))
+    requests = []
+    def handler(request):
+        requests.append(request.url.path)
+        body = ({"id": None, "showMessage": {"showContent": False}} if request.url.path.endswith('/42')
+                else {"id": 43, "createTime": int(SINCE.timestamp() * 1000)})
+        return httpx.Response(200, json={"success": True, "code": 0, "data": body})
+    client_factory = lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
+    limiter = AsyncMock()
+    report = await repair_dates(engine=engine, apply=True, fetch_missing=True,
+        client_factory=client_factory, limiter=limiter)
+    assert report["repaired"] == 1 and report["unavailable_total"] == 1
+    assert report["remaining_null"] == 1 and report["status"] == "partial"
+    assert len(requests) == 2
+    await repair_dates(engine=engine, apply=True, fetch_missing=True,
+        client_factory=client_factory, limiter=limiter)
+    assert len(requests) == 2
+
+
+async def test_identity_mismatch_stops_repairs_without_mutating_dates(engine):
+    import httpx
+    from interviewlens.crawler.date_repair import repair_dates
+    async with engine.begin() as connection:
+        await connection.execute(text("""
+            INSERT INTO posts(source_url) VALUES
+                ('https://www.nowcoder.com/discuss/42'),('https://www.nowcoder.com/discuss/43')
+        """))
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
+        "success": True, "code": 0, "data": {"id": 999, "createTime": int(SINCE.timestamp() * 1000)}}))
+    report = await repair_dates(engine=engine, apply=True, fetch_missing=True,
+        client_factory=lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs),
+        limiter=AsyncMock())
+    assert report["status"] == "stopped" and report["reason"] == "detail_identity_mismatch"
+    assert report["requests"] == 1 and report["repaired"] == 0 and report["remaining_null"] == 2

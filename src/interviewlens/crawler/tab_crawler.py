@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from playwright.async_api import Error as PlaywrightError
@@ -27,6 +27,7 @@ from ..logging import log
 from .cleaner import strip_nowcoder_noise
 from .playwright_runner import NowcoderFetcher
 from .rate_limit import AsyncRateLimiter
+from .record_metadata import publication_ms
 from .response_guard import CrawlStoppedError, check_page, check_status, parse_records
 
 TAB_API = "https://gw-c.nowcoder.com/api/sparta/home/tab/content"
@@ -54,7 +55,8 @@ def build_detail_url(record: dict) -> str | None:
     content_type = record.get("contentType", 0)
     if content_type == 74 and uuid:
         return f"https://www.nowcoder.com/feed/main/detail/{uuid}"
-    cid = str(record.get("contentId") or md.get("id", ""))
+    cid = str(record.get("contentId") or (record.get("contentData") or {}).get("id")
+              or (record.get("extraInfo") or {}).get("contentID_var") or md.get("id", ""))
     return f"https://www.nowcoder.com/discuss/{cid}" if cid else None
 
 
@@ -66,9 +68,10 @@ def extract_post(record: dict, content: str = "", page_title: str = "") -> dict:
     md = record.get("momentData") or {}
     ub = record.get("userBrief") or {}
     fd = record.get("frequencyData") or {}
-    created_ms = md.get("createdAt") or 0
+    created_ms = publication_ms(record) or 0
 
-    title = (md.get("title") or "").strip()
+    cd = record.get("contentData") or {}
+    title = (md.get("title") or cd.get("title") or cd.get("newTitle") or "").strip()
     if not title and page_title:
         title = page_title
 

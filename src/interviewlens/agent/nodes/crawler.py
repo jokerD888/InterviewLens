@@ -6,6 +6,7 @@ is True.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlmodel import select
@@ -72,6 +73,8 @@ async def run(
                 url=result.final_url,
                 title=result.title,
                 raw_html=result.html,
+                posted_at=(datetime.fromtimestamp(result.published_ms / 1000, UTC).replace(tzinfo=None)
+                           if getattr(result, "published_ms", None) else None),
             )
             post_id = post.id
 
