@@ -994,10 +994,10 @@ def backfill_status(
 # --------------------------------------------------------- tab-crawl
 @app.command(name="tab-crawl")
 def tab_crawl(
-    pages: int = typer.Option(3, help="API pages: tab export 1..3; joblist up to 100"),
+    pages: int = typer.Option(3, help="List request budget: tab export 1..3; joblist 1..500"),
     output: str = typer.Option("", help="Save results as JSON Lines to this path"),
     delay: float = typer.Option(1.5, help="Seconds between detail page requests"),
-    source: str = typer.Option("tab", help="tab (default, 400 posts, discuss+moment) | joblist (2000 moment posts, faster)"),
+    source: str = typer.Option("tab", help="tab (browser details) | joblist (API export, discussions and moments)"),
     since: str = typer.Option("", help="Only posts on/after this date (YYYY-MM-DD), joblist only"),
     save_db: bool = typer.Option(False, "--save-db", help="Deprecated; database harvesting uses backfill-crawl"),
 ) -> None:

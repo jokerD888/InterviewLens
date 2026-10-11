@@ -380,3 +380,13 @@ async def test_identity_mismatch_stops_repairs_without_mutating_dates(engine):
         limiter=AsyncMock())
     assert report["status"] == "stopped" and report["reason"] == "detail_identity_mismatch"
     assert report["requests"] == 1 and report["repaired"] == 0 and report["remaining_null"] == 2
+
+
+async def test_unidentifiable_page_does_not_silently_advance_history(engine):
+    store = BackfillStore(engine)
+    async with store.locked():
+        await store.begin_batch(SINCE, 3600, False)
+        with pytest.raises(CrawlStoppedError, match="unidentified_list_records"):
+            await store.enqueue_page([{"title": "unrecognized payload"}], 1, SINCE)
+        snapshot = await store.snapshot()
+        assert snapshot["next_page"] == 1 and snapshot["pending"] == 0

@@ -151,6 +151,8 @@ class BackfillStore:
 
         async with self.connection.begin():
             fingerprint = page_fingerprint(records)
+            if records and fingerprint is None:
+                raise CrawlStoppedError("unidentified_list_records")
             # Same page on a later run is intentional overlap; another page with
             # identical identities signals a clamped/repeated server response.
             repeated = await self.connection.execute(text("""
