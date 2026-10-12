@@ -15,7 +15,6 @@ def should_continue(report: dict) -> bool:
     return (
         report.get("status") in ("complete", "batch_limit")
         and not report.get("completed", False)
-        and report.get("today_attempts", 0) < 100
         and bool(report.get("saved") or report.get("discovered_pages"))
     )
 
@@ -62,13 +61,13 @@ def main():
 
         async def batch():
             return await backfill_batch(
-                limits=BackfillLimits(pages=5, cooldown=0, continuous=True),
+                limits=BackfillLimits(pages=5, cooldown=0, continuous=True, daily=None),
                 listing=args.listing, job_id=args.job_id, job_level=args.job_level,
                 fetcher_factory=lambda: NowcoderFetcher(limiter=limiter), progress=emit,
             )
 
         emit("startup", {"log": str(log_path), "once": args.once,
-                         "batch": 30, "daily": 100, "request_interval": "11..20s"})
+                         "batch": 30, "daily": "unlimited", "request_interval": "11..20s"})
         try:
             asyncio.run(run_batches(batch, once=args.once, emit=emit))
         except KeyboardInterrupt:

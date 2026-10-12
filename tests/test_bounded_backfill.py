@@ -192,6 +192,17 @@ async def test_metadata_requests_share_batch_cap(monkeypatch):
     assert store.reserve_attempt.await_count == 30
 
 
+async def test_unlimited_daily_mode_fetches_above_previous_cap(monkeypatch):
+    store = fake_store(attempts=1000, pending=[{"url": "https://www.nowcoder.com/discuss/1", "record": {}}])
+    monkeypatch.setattr(backfill, "fetch_detail", AsyncMock(return_value=("body", "title")))
+    monkeypatch.setattr(backfill, "extract_post", lambda *_: {"created_at_ms": 1700000000000, "title": "title"})
+    report = await backfill.backfill_batch(
+        store=store, fetcher_factory=fake_fetcher, limits=BackfillLimits(daily=None),
+    )
+    assert report["status"] == "complete" and report["saved"] == 1
+    store.reserve_attempt.assert_awaited_once_with("https://www.nowcoder.com/discuss/1", None)
+
+
 async def test_daily_stop_skips_model_pipeline_and_releases_redis_lock(monkeypatch):
     from interviewlens.agent import recovery
     from interviewlens.tasks import daily

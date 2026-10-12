@@ -17,14 +17,14 @@ from .tab_crawler import extract_post, fetch_detail, fetch_tab_page
 @dataclass(frozen=True)
 class BackfillLimits:
     batch: int = 30
-    daily: int = 100
+    daily: int | None = 100
     pages: int = 3
     cooldown: int = 3600
     continuous: bool = False
 
     def __post_init__(self):
-        if not 1 <= self.batch <= 30 or not 1 <= self.daily <= 100:
-            raise ValueError("batch must be 1..30; daily must be 1..100")
+        if not 1 <= self.batch <= 30 or (self.daily is not None and not 1 <= self.daily <= 100):
+            raise ValueError("batch must be 1..30; daily must be 1..100 or None (unlimited)")
         if not 3 <= self.pages <= 5:
             raise ValueError("pages must be 3..5")
         if self.continuous:
@@ -76,7 +76,7 @@ async def backfill_batch(
             await store.retry_failed()
         await store.mark_existing()
         state = await store.snapshot()
-        if state["today_attempts"] >= limits.daily:
+        if limits.daily is not None and state["today_attempts"] >= limits.daily:
             return {**result, "status": "daily_limit", **state}
         current_url = None
         emit("batch_start", pending=state["pending"], today_attempts=state["today_attempts"])

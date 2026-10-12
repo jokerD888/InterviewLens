@@ -390,3 +390,21 @@ async def test_unidentifiable_page_does_not_silently_advance_history(engine):
             await store.enqueue_page([{"title": "unrecognized payload"}], 1, SINCE)
         snapshot = await store.snapshot()
         assert snapshot["next_page"] == 1 and snapshot["pending"] == 0
+
+
+async def test_unlimited_daily_budget_keeps_counting_after_100(engine):
+    store = BackfillStore(engine)
+    url = "https://www.nowcoder.com/discuss/1"
+    async with store.locked():
+        await store.begin_batch(SINCE, 0, False)
+        await store.enqueue_page([record(1)], 1, SINCE)
+        async with store.connection.begin():
+            await store.connection.execute(text("""
+                INSERT INTO crawl_daily_budget(source,day,detail_attempts)
+                VALUES(:source,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,100)
+            """), {"source": store.source})
+        assert await store.reserve_attempt(url, None)
+        assert await store.reserve_attempt(url, None)
+        assert (await store.snapshot())["today_attempts"] == 102
+        assert (await store.pending(1))[0]["attempts"] == 2
+        assert not await store.reserve_attempt(url, 100)

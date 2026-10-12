@@ -192,7 +192,7 @@ class BackfillStore:
                 {"source": self.source, "next": page + 1, "empty": not records},
             )
 
-    async def reserve_attempt(self, url: str, daily_limit: int):
+    async def reserve_attempt(self, url: str, daily_limit: int | None):
         # Charge before navigation: failures and process crashes consume the budget too.
         async with self.connection.begin():
             spent = (await self.connection.execute(text("""
@@ -201,7 +201,7 @@ class BackfillStore:
             """))).scalar_one()
             # All sources are under the same advisory lock. Partitioning the
             # discovery feed must not multiply the application's daily quota.
-            if spent >= daily_limit:
+            if daily_limit is not None and spent >= daily_limit:
                 return False
             charged = (
                 await self.connection.execute(
@@ -210,10 +210,9 @@ class BackfillStore:
                 VALUES(:source,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,1)
                 ON CONFLICT(source,day) DO UPDATE
                 SET detail_attempts=crawl_daily_budget.detail_attempts+1
-                WHERE crawl_daily_budget.detail_attempts < :limit
                 RETURNING detail_attempts
             """),
-                    {"source": self.source, "limit": daily_limit},
+                    {"source": self.source},
                 )
             ).first()
             if not charged:

@@ -17,6 +17,7 @@ spec.loader.exec_module(runner)
 
 def test_continuous_mode_explicit_and_preserves_budget_caps():
     assert BackfillLimits(cooldown=0, continuous=True).daily == 100
+    assert BackfillLimits(cooldown=0, continuous=True, daily=None).daily is None
     for kwargs in ({"cooldown": 0}, {"continuous": True},
                    {"cooldown": 0, "continuous": True, "daily": 101}):
         with pytest.raises(ValueError):
@@ -43,4 +44,4 @@ async def test_once_does_not_start_another_batch():
 def test_no_progress_or_finished_scan_stops():
     assert not runner.should_continue({"status": "complete", "saved": 0})
     assert not runner.should_continue({"status": "complete", "saved": 30, "completed": True})
-    assert not runner.should_continue({"status": "complete", "saved": 30, "today_attempts": 100})
+    assert runner.should_continue({"status": "complete", "saved": 30, "today_attempts": 1000})
