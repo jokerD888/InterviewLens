@@ -2,17 +2,86 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from ..config import settings
 from ..crawler.cleaner import strip_nowcoder_noise
 from ..logging import log
 from ..observability import incr_cache
-from ..position_taxonomy import PositionProfile, validate_evidence
+from ..position_taxonomy import (
+    DOMAINS,
+    SKILL_ALIASES,
+    SKILLS,
+    SPECIALIZATIONS,
+    PositionCategory,
+    PositionProfile,
+    validate_evidence,
+)
 from .cache import cache_get, cache_set, make_cache_key
 from .deepseek import ToolCallResult, call_tool
 from .prompts import build_extractor_messages, get_extractor_prompt_version
 from .schema import EXTRACT_FUNCTION_SCHEMA, ExtractedPost
+
+
+def _parse_extraction(arguments: dict, author_text: str) -> ExtractedPost:
+    """Drop only out-of-vocabulary optional facets at the model boundary.
+
+    Admin writes still use strict PositionProfile validation. A provider's
+    invented skill must not discard correctly extracted interview questions.
+    Malformed structures and invalid primary categories still fail validation.
+    """
+    arguments = deepcopy(arguments)
+    profiles = arguments.get("position_profiles")
+    for profile in profiles if isinstance(profiles, list) else []:
+        if not isinstance(profile, dict):
+            continue
+        # Uncertain/out-of-scope output never becomes a classified role just
+        # because the model also supplied a category. Prefer the conservative
+        # state rather than guessing which contradictory field was intended.
+        if profile.get("status", "uncertain") in ("uncertain", "out_of_scope"):
+            if profile.get("category") in set(PositionCategory):
+                profile["category"] = None
+        elif profile.get("status") == "classified" and profile.get("category") is None:
+            profile["status"] = "uncertain"
+        for field, vocabulary in (
+            ("specializations", SPECIALIZATIONS),
+            ("domains", DOMAINS),
+            ("skills", SKILLS),
+        ):
+            values = profile.get(field, [])
+            if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+                continue
+            normalized = [SKILL_ALIASES.get(v, v) if field == "skills" else v for v in values]
+            rejected = sorted(set(normalized) - set(vocabulary))
+            if rejected:
+                log.warning("extractor.dropped_unsupported_facets", field=field, values=rejected)
+            profile[field] = [v for v in normalized if v in vocabulary]
+        evidence = profile.get("evidence", [])
+        if isinstance(evidence, list):
+            vocabularies = {
+                "specializations": SPECIALIZATIONS,
+                "domains": DOMAINS,
+                "skills": SKILLS,
+            }
+            profile["evidence"] = [
+                e
+                for e in evidence
+                if not isinstance(e, dict)
+                or e.get("field") not in vocabularies
+                or not isinstance(e.get("value"), str)
+                or (
+                    SKILL_ALIASES.get(e.get("value"), e.get("value"))
+                    if e.get("field") == "skills"
+                    else e.get("value")
+                )
+                in vocabularies[e["field"]]
+            ]
+    parsed = ExtractedPost.model_validate(arguments)
+    parsed.position_profiles = [validate_evidence(p, author_text) for p in parsed.position_profiles]
+    if not parsed.position_profiles:
+        parsed.position_profiles = [PositionProfile()]
+    return parsed
 
 
 async def extract_from_text(
@@ -52,12 +121,7 @@ async def extract_from_text(
         if cached is not None:
             log.info("extract.cache_hit", post_id=post_id, key=cache_key[-12:])
             await incr_cache(hit=True)
-            parsed = ExtractedPost.model_validate(cached["arguments"])
-            parsed.position_profiles = [
-                validate_evidence(p, cleaned_text) for p in parsed.position_profiles
-            ]
-            if not parsed.position_profiles:
-                parsed.position_profiles = [PositionProfile()]
+            parsed = _parse_extraction(cached["arguments"], cleaned_text)
             return parsed, {
                 "cache_hit": True,
                 "usage": None,
@@ -128,18 +192,13 @@ async def extract_from_text(
                 log.info("extractor.normalized_category", value=q["category"])
                 q["category"] = "其他"
 
-    parsed = ExtractedPost.model_validate(args)
-    parsed.position_profiles = [
-        validate_evidence(p, cleaned_text) for p in parsed.position_profiles
-    ]
-    if not parsed.position_profiles:
-        parsed.position_profiles = [PositionProfile()]
+    parsed = _parse_extraction(args, cleaned_text)
 
     if use_cache:
         await cache_set(
             cache_key,
             {
-                "arguments": result.arguments,
+                "arguments": parsed.model_dump(mode="json"),
                 "model": result.model,
                 "usage": result.usage,
             },
