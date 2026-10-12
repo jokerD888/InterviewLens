@@ -1,6 +1,8 @@
 """Verify consecutive batches retain guardrails without long batch sleeps."""
 
+import argparse
 import importlib.util
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -45,3 +47,9 @@ def test_no_progress_or_finished_scan_stops():
     assert not runner.should_continue({"status": "complete", "saved": 0})
     assert not runner.should_continue({"status": "complete", "saved": 30, "completed": True})
     assert runner.should_continue({"status": "complete", "saved": 30, "today_attempts": 1000})
+
+
+def test_source_switch_retains_original_beijing_campaign_boundary():
+    assert runner.parse_since("2026-07-08").astimezone(UTC) == datetime(2026, 7, 7, 16, tzinfo=UTC)
+    with pytest.raises(argparse.ArgumentTypeError):
+        runner.parse_since("bad-date")

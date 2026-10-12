@@ -62,6 +62,8 @@ python -m interviewlens.cli repair-post-dates --apply --fetch-missing --max-requ
 & .\scripts\start_visible_backfill.ps1
 # 只执行一批：
 & .\scripts\start_visible_backfill.ps1 -Once
+# 旧tab遇到分页边界后，改用新版全部岗位列表；保留7月8日起点：
+& .\scripts\start_visible_backfill.ps1 -Listing job -JobId -1 -JobLevel 1 -Since '2026-07-08'
 ```
 
 连续模式明确设置 continuous=true、cooldown=0、daily=null，取消批间长休息和每日数量上限（2026-10-12按用户要求调整）。每批最多30次详情请求（包括日期元数据请求），每日请求数继续记录，不清零已有计数。列表、详情和日期请求串行使用同一个限速器；相邻请求最少10秒加1–10秒随机间隔，限速器在批次之间保留。普通CLI定时批次仍保持一小时冷却和显式日预算。
@@ -69,3 +71,5 @@ python -m interviewlens.cli repair-post-dates --apply --fetch-missing --max-requ
 控制台逐条显示列表页、详情URL和保存进度，日志位于本机 LOCALAPPDATA/InterviewLens/visible-backfill。已入库URL不会再进入待抓队列；队列URL全局唯一。为应对列表插入和排序变动仍会重访最多两页，这不等于重复请求已入库正文。遇到重复页、鉴权/限流、异常、已有任务占锁或无进展立即停止，不自动清除暂停、不重置断点、不无限重试。Ctrl+C可停止。
 
 本次新入口相关回归验证74项通过，包含真实PostgreSQL重复页/队列/预算检查、连续批次异常停止及日期请求计入每批上限。
+
+2026-10-12：旧tab在第21页返回已见集合，暂停时总库1113篇，当日新增147篇。只读探测新版job/list全部岗位与后端第一页面均为20条有效记录、全部未入库，日期覆盖10月11–12日。切换新版来源从新断点开始，全局正文URL去重继续生效，旧暂停保留；不能据第一页探测推断全部历史可覆盖。启动入口支持上述岗位与起点参数。遇到采集守卫停止时Python返回退出码2，便于区分成功批次与受阻运行。

@@ -7,8 +7,16 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+
+def parse_since(value: str) -> datetime:
+    try:
+        return datetime.combine(date.fromisoformat(value), time.min, ZoneInfo("Asia/Shanghai"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("since must be YYYY-MM-DD") from exc
 
 
 def should_continue(report: dict) -> bool:
@@ -35,6 +43,7 @@ def main():
     parser.add_argument("--listing", choices=("tab", "job"), default="tab")
     parser.add_argument("--job-id", type=int, default=-1)
     parser.add_argument("--job-level", type=int, choices=(1, 2, 3), default=1)
+    parser.add_argument("--since", type=parse_since, help="Campaign boundary (Beijing date); must match an existing cursor")
     args = parser.parse_args()
     from dotenv import load_dotenv
 
@@ -63,13 +72,16 @@ def main():
             return await backfill_batch(
                 limits=BackfillLimits(pages=5, cooldown=0, continuous=True, daily=None),
                 listing=args.listing, job_id=args.job_id, job_level=args.job_level,
+                since=args.since,
                 fetcher_factory=lambda: NowcoderFetcher(limiter=limiter), progress=emit,
             )
 
         emit("startup", {"log": str(log_path), "once": args.once,
-                         "batch": 30, "daily": "unlimited", "request_interval": "11..20s"})
+                         "batch": 30, "daily": "unlimited", "request_interval": "11..20s",
+                         "listing": args.listing, "job_id": args.job_id,
+                         "job_level": args.job_level, "since": args.since})
         try:
-            asyncio.run(run_batches(batch, once=args.once, emit=emit))
+            report = asyncio.run(run_batches(batch, once=args.once, emit=emit))
         except KeyboardInterrupt:
             emit("error", {"reason": "user_stopped"})
             return 130
@@ -78,6 +90,8 @@ def main():
             emit("error", {"reason": type(exc).__name__, "error_module": type(exc).__module__})
             return 1
         print("Stopped. Read the final report above before restarting.", flush=True)
+        if report.get("status") not in ("complete", "batch_limit"):
+            return 2
     return 0
 
 
