@@ -34,12 +34,15 @@
 - 增加 rehype-sanitize 6.0.0，升级/覆盖受影响的 PostCSS、nanoid、source-map-js 依赖。
 - 2026-10-13 npm registry 查询及生产依赖审计：**0 critical / high / moderate / low**。这表示当前审计库未报漏洞，不是永久安全保证。
 - 后端：**256 passed、11 skipped**；包含独立临时 schema 的真实 PostgreSQL 测试。跳过的项目主要是未启用的历史岗位/时间集成测试，不代表它们已通过。
-- 前端：TypeScript、Markdown 净化用例及生产构建验证。部署后另做本机网页/API 冒烟检查。
+- 前端：TypeScript、Markdown 净化用例及生产构建均通过。本机 API、网页代理、搜索、认证健康检查均通过；真实浏览器验证了管理登录、公司目录点击和分类编辑器加载，未提交分类变更。
+- 用真实 Redis、独立随机前缀执行费用守卫 Lua，验证预留/结算、预算熔断和每分钟限制；provider 使用本地 stub，付费调用为0，测试键已清理。
 - 核心变更模块的 F/E9 静态检查通过。没有用实际攻击或生产负载测试代替回归。
 
 版本依据：[Next.js 官方九月安全发布说明](https://nextjs.org/blog/upcoming-nextjs-security-release-september-2026)、[rehype-sanitize 官方文档](https://github.com/rehypejs/rehype-sanitize)。依赖补丁按当前已发布版本安装，后续安全公告仍须正常跟进。
 
 ## 已应用的本机配置与迁移
+
+代码已快进合入 main（修复提交 7c27ad7）；API 与网页在本机重新启动，http://127.0.0.1:3013/ 可访问。未启动 Celery worker 或采集脚本。
 
 已应用 sql/011_pipeline_recovery.sql、012_site_request_guard.sql、013_interview_attribution.sql。迁移前后均为 **1211 篇帖子 / 10080 道题 / 435 份摘要**；原始帖子、题解、向量、摘要及旧关联均保留。
 
