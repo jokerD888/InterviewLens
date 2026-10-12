@@ -68,6 +68,7 @@ BODY = "字节后端开发,电商数据库。Redis 与 Elasticsearch 的区别?G
 @pytest.mark.parametrize("cache_hit", [False, True])
 async def test_optional_unknown_facets_do_not_discard_questions(monkeypatch, cache_hit):
     args = payload()
+    args["rounds"][0]["questions"].extend([{"content": "锁"}, {"content": " "}])
     original = deepcopy(args)
     cached = {"arguments": args, "model": "test"} if cache_hit else None
     monkeypatch.setattr(extractor, "cache_get", AsyncMock(return_value=cached))

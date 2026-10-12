@@ -32,6 +32,23 @@ def _parse_extraction(arguments: dict, author_text: str) -> ExtractedPost:
     Malformed structures and invalid primary categories still fail validation.
     """
     arguments = deepcopy(arguments)
+    rounds = arguments.get("rounds")
+    for round_item in rounds if isinstance(rounds, list) else []:
+        if not isinstance(round_item, dict) or not isinstance(round_item.get("questions"), list):
+            continue
+        questions = round_item["questions"]
+        kept = [
+            q
+            for q in questions
+            if not (
+                isinstance(q, dict)
+                and isinstance(q.get("content"), str)
+                and len(q["content"].strip()) < 2
+            )
+        ]
+        if len(kept) != len(questions):
+            log.warning("extractor.dropped_question_fragments", count=len(questions) - len(kept))
+        round_item["questions"] = kept
     profiles = arguments.get("position_profiles")
     for profile in profiles if isinstance(profiles, list) else []:
         if not isinstance(profile, dict):
