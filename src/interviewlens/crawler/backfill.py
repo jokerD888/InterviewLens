@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -19,18 +20,24 @@ class BackfillLimits:
     daily: int = 100
     pages: int = 3
     cooldown: int = 3600
+    continuous: bool = False
 
     def __post_init__(self):
         if not 1 <= self.batch <= 30 or not 1 <= self.daily <= 100:
             raise ValueError("batch must be 1..30; daily must be 1..100")
-        if not 3 <= self.pages <= 5 or self.cooldown < 3600:
-            raise ValueError("pages must be 3..5; cooldown must be at least 3600 seconds")
+        if not 3 <= self.pages <= 5:
+            raise ValueError("pages must be 3..5")
+        if self.continuous:
+            if self.cooldown != 0:
+                raise ValueError("continuous batches must use cooldown=0")
+        elif self.cooldown < 3600:
+            raise ValueError("cooldown must be at least 3600 seconds outside continuous mode")
 
 
 def make_fetcher():
     # Shared by discovery and details. First request also receives jitter.
-    # 8-second minimum plus 1..7 seconds jitter, avoiding bursts between endpoints.
-    return NowcoderFetcher(limiter=AsyncRateLimiter(rate_per_sec=1 / 8, jitter=(1, 7)))
+    # 10-second minimum plus 1..10 seconds jitter, avoiding bursts between endpoints.
+    return NowcoderFetcher(limiter=AsyncRateLimiter(rate_per_sec=1 / 10, jitter=(1, 10)))
 
 
 async def backfill_batch(
@@ -44,6 +51,7 @@ async def backfill_batch(
     job_level: int = 1,
     store=None,
     fetcher_factory=None,
+    progress: Callable[[str, dict], None] | None = None,
 ) -> dict:
     if listing not in ("tab", "job") or job_level not in (1, 2, 3):
         raise ValueError("listing must be tab/job; job_level must be 1..3")
@@ -54,6 +62,10 @@ async def backfill_batch(
         BackfillStore(source=f"nowcoder-job-v2-{job_id}-{job_level}"))
     fetcher_factory = fetcher_factory or make_fetcher
     result = {"status": "complete", "discovered_pages": 0, "attempted": 0, "saved": 0}
+    def emit(event, **fields):
+        if progress is not None:
+            progress(event, fields)
+
     async with store.locked() as acquired:
         if not acquired:
             return {**result, "status": "locked"}
@@ -67,28 +79,35 @@ async def backfill_batch(
         if state["today_attempts"] >= limits.daily:
             return {**result, "status": "daily_limit", **state}
         current_url = None
+        emit("batch_start", pending=state["pending"], today_attempts=state["today_attempts"])
         try:
             async with fetcher_factory() as fetcher:
                 pending = await store.pending(limits.batch)
                 if not pending:
-                    progress = await store.start_scan()
+                    cursor = await store.start_scan()
                     # Revisit two pages to tolerate modest insertions/reordering. Always
                     # advance at least one page (pages>=3). Existing URLs never end a scan.
-                    first = max(1, progress["next_page"] - 2)
+                    first = max(1, cursor["next_page"] - 2)
                     for page in range(first, first + limits.pages):
+                        emit("page_start", page=page)
                         records = (await fetch_tab_page(page, fetcher) if listing == "tab" else
                             await fetch_job_page(page, fetcher, job_id=job_id, level=job_level))
-                        await store.enqueue_page(records, page, progress["since_at"])
+                        await store.enqueue_page(records, page, cursor["since_at"])
                         result["discovered_pages"] += 1
+                        emit("page_done", page=page, records=len(records))
                         if not records:
                             break
                     pending = await store.pending(limits.batch)
-                for item in pending:
+                for index, item in enumerate(pending, 1):
+                    if result["attempted"] >= limits.batch:
+                        result["status"] = "batch_limit"
+                        break
                     current_url = item["url"]
                     if not await store.reserve_attempt(current_url, limits.daily):
                         result["status"] = "daily_limit"
                         break
                     result["attempted"] += 1
+                    emit("detail_start", index=index, limit=len(pending), url=current_url)
                     content, title = await fetch_detail(fetcher, current_url)
                     if not content.strip():
                         raise CrawlStoppedError("empty_detail", retryable=True)
@@ -96,18 +115,22 @@ async def backfill_batch(
                     if not post["created_at_ms"]:
                         # A metadata fallback is another detail request, and
                         # consumes the same daily request budget before navigation.
-                        if await store.reserve_attempt(current_url, limits.daily):
+                        if result["attempted"] >= limits.batch:
+                            result["status"] = "batch_limit"
+                        elif await store.reserve_attempt(current_url, limits.daily):
                             result["attempted"] += 1
                             post["created_at_ms"] = await fetch_publication(current_url, fetcher)
                         else:
                             result["status"] = "daily_limit"
                     result["saved"] += int(await store.finish(current_url, post))
+                    emit("detail_done", saved=result["saved"], title=post["title"])
                     current_url = None
-                    if result["status"] == "daily_limit":
+                    if result["status"] in ("daily_limit", "batch_limit"):
                         break
         except CrawlStoppedError as exc:
             await store.fail(current_url, exc.reason, pause=not exc.retryable)
             result.update(status="stopped", reason=exc.reason)
+            emit("stopped", reason=exc.reason)
         # Cancellation and unexpected errors propagate: already committed queue/cursor
         # and attempt reservations survive; lock and browser are released by contexts.
         return {**result, **await store.snapshot()}

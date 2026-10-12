@@ -176,6 +176,22 @@ async def test_cancellation_propagates_and_releases_browser_and_lock(monkeypatch
     store.finish.assert_not_awaited()
 
 
+async def test_metadata_requests_share_batch_cap(monkeypatch):
+    items = [{"url": f"https://www.nowcoder.com/discuss/{i}", "record": {}}
+             for i in range(30)]
+    store = fake_store(pending=items)
+    monkeypatch.setattr(backfill, "fetch_detail", AsyncMock(return_value=("body", "title")))
+    monkeypatch.setattr(backfill, "extract_post", lambda *_: {"created_at_ms": 0, "title": "title"})
+    metadata = AsyncMock(return_value=1700000000000)
+    monkeypatch.setattr(backfill, "fetch_publication", metadata)
+    report = await backfill.backfill_batch(store=store, fetcher_factory=fake_fetcher)
+    assert report["attempted"] == 30
+    assert report["saved"] == 15
+    assert report["status"] == "batch_limit"
+    assert metadata.await_count == 15
+    assert store.reserve_attempt.await_count == 30
+
+
 async def test_daily_stop_skips_model_pipeline_and_releases_redis_lock(monkeypatch):
     from interviewlens.agent import recovery
     from interviewlens.tasks import daily
@@ -229,8 +245,8 @@ async def test_pacer_spaces_requests_and_adds_jitter(monkeypatch):
     await limiter.acquire()
     first = clock[0]
     await limiter.acquire()
-    assert clock[0] - first == 11
-    assert sleeps == [3.0, 8.0, 3.0]
+    assert clock[0] - first == 13
+    assert sleeps == [3.0, 10.0, 3.0]
 
 
 def test_cli_rejects_unbounded_export_and_invalid_dates():
