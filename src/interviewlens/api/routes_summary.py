@@ -1,4 +1,5 @@
 """/summaries — query persisted Aggregator output."""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,8 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from ..db.processing_reads import READY_POST_SQL
 from ..config import settings
 from ..db import Company, Position, Summary
+from ..db.attribution import question_scope_sql
 from ..observability import incr_cache
 from .cache import cache_json_get, cache_json_set
 from .deps import get_session
@@ -47,9 +50,10 @@ async def list_summaries(
     session: AsyncSession = Depends(get_session),
 ) -> list[SummaryOut]:
     if settings.search_cache_enabled:
-        key = _key("summaries", {
-            "company": company, "position": position, "period": period, "limit": limit
-        })
+        key = _key(
+            "summaries",
+            {"company": company, "position": position, "period": period, "limit": limit},
+        )
         cached = await cache_json_get(key)
         if cached is not None:
             await incr_cache(True)
@@ -74,7 +78,9 @@ async def list_summaries(
     out = [_summary_out(s, c_name, p_name) for s, c_name, p_name in rows]
 
     if settings.search_cache_enabled:
-        await cache_json_set(key, [o.model_dump(mode="json") for o in out], ttl_seconds=_SUMMARY_TTL)
+        await cache_json_set(
+            key, [o.model_dump(mode="json") for o in out], ttl_seconds=_SUMMARY_TTL
+        )
     return out
 
 
@@ -125,19 +131,16 @@ async def list_raw_questions(
     """Return every question (no dedup, no LLM) for this company+position."""
     from sqlalchemy import text as sa_text
 
-    sql = sa_text("""
+    sql = sa_text(f"""
         SELECT q.id, q.post_id, q.round_no, q.round_type,
                q.content, q.category, q.answer_brief, q.answer_ai,
                COALESCE(po.content_score, 0) AS content_score,
                po.source_url
         FROM questions q
         JOIN posts po ON po.id = q.post_id
-        JOIN post_company_position pcp ON pcp.post_id = po.id
-        JOIN companies c ON c.id = pcp.company_id
-        JOIN positions p ON p.id = pcp.position_id
-        WHERE c.canonical = :company
-          AND p.canonical = :position
+        WHERE {question_scope_sql()}
           AND po.extract_status = 'done'
+          AND {READY_POST_SQL}
           AND (
               CAST(:period AS TEXT) IS NULL
               OR CAST(:period AS TEXT) = 'all'

@@ -1,4 +1,5 @@
 """Extractor node — wraps llm.extract_from_text for the graph."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ from ...db.repositories import replace_questions
 from ...llm import extract_from_text, get_extractor_prompt_version
 from ...logging import log
 from ...observability import node_span
+from ..processing import fence_state, save_extraction
 from ..state import PipelineState
 
 NODE_NAME = "extractor"
@@ -55,6 +57,7 @@ async def run(
             # logic bugs (TypeError/AttributeError) bubble up to the DLQ.
             log.error("node.extractor.failed", post_id=post_id, exc_info=True)
             async with session_scope() as session:
+                await fence_state(session, state)
                 await mark_extract_status(
                     session,
                     post_id,
@@ -69,8 +72,27 @@ async def run(
 
         rounds_json = [r.model_dump() for r in parsed.rounds]
         async with session_scope() as session:
-            inserted = await replace_questions(session, post_id, rounds_json)
+            await fence_state(session, state)
+            refs = {}
+            inserted = await replace_questions(session, post_id, rounds_json, question_refs=refs)
+            if state.get("processing_owner"):
+                from sqlalchemy import text
+
+                await session.execute(
+                    text("DELETE FROM post_question_refs WHERE post_id=:id"), {"id": post_id}
+                )
+                for (ri, qi), question in refs.items():
+                    await session.execute(
+                        text("""
+                        INSERT INTO post_question_refs(post_id,round_index,question_index,question_id)
+                        VALUES(:post,:round,:question,:id)
+                    """),
+                        {"post": post_id, "round": ri, "question": qi, "id": question.id},
+                    )
             await save_profiles(session, post_id, parsed.position_profiles, cleaned)
+            await save_extraction(
+                session, post_id, state.get("processing_owner"), parsed.model_dump()
+            )
             await set_interview_date(session, post_id, parsed.interview_date)
             await mark_extract_status(
                 session,

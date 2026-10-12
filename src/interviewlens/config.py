@@ -1,4 +1,5 @@
 """Centralised settings loaded from environment / .env via pydantic-settings."""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -36,6 +37,16 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_chat: str = "deepseek-chat"
     deepseek_model_reasoner: str = "deepseek-reasoner"
+    llm_concurrency: int = Field(default=4, ge=1, le=32)
+    llm_requests_per_minute: int = Field(default=30, ge=1, le=1000)
+    llm_daily_token_budget: int = Field(default=2_000_000, ge=1)
+    admin_api_token: str = ""
+    app_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3013",
+        "http://127.0.0.1:3013",
+    ]
 
     # ---- Embedding ----
     embedding_model: str = "BAAI/bge-m3"
@@ -69,8 +80,8 @@ class Settings(BaseSettings):
 
     # ---- Search cache (read-path optimisation for /posts/search) ----
     search_cache_enabled: bool = True
-    search_embed_ttl_seconds: int = 86_400   # 24h — embedding only depends on text + model
-    search_result_ttl_seconds: int = 1_800   # 30min — full result depends on data too
+    search_embed_ttl_seconds: int = 86_400  # 24h — embedding only depends on text + model
+    search_result_ttl_seconds: int = 1_800  # 30min — full result depends on data too
 
     # ---- Bridge to daily-interview-prep ----
     daily_prep_api_url: str = "http://localhost:8000/api"

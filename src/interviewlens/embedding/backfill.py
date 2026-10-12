@@ -4,6 +4,7 @@ Each question's content is encoded with bge-m3 and written to
 ``questions.embedding``. Rows are skipped only when their vector already uses
 the current model/version; ``force=True`` recomputes everything.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,6 +37,8 @@ async def backfill_embeddings(
     batch_size: int = 64,
     limit: int | None = None,
     force: bool = False,
+    post_ids: list[int] | None = None,
+    processing_owner: str | None = None,
 ) -> BackfillStats:
     """Encode missing question embeddings in batches.
 
@@ -43,10 +46,16 @@ async def backfill_embeddings(
     to ``batch_size`` strings at a time. The DB write is a single UPDATE per row
     keyed by id; pgvector's ``Vector`` type accepts a numpy array.
     """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     stats = BackfillStats()
 
     async with session_scope() as session:
         stmt = select(Question)
+        if post_ids is not None:
+            if not post_ids:
+                return stats
+            stmt = stmt.where(Question.post_id.in_(post_ids))
         if not force:
             stmt = stmt.where(
                 or_(
@@ -74,10 +83,14 @@ async def backfill_embeddings(
 
         async with session_scope() as session:
             for q, v in zip(chunk, vecs, strict=True):
+                if processing_owner:
+                    from ..agent.processing import fence
+
+                    await fence(session, q.post_id, processing_owner)
                 # pgvector accepts list/np array for the Vector column
                 await session.execute(
                     update(Question)
-                    .where(Question.id == q.id)
+                    .where(Question.id == q.id, Question.content == q.content)
                     .values(
                         embedding=v.tolist(),
                         embedding_model=settings.embedding_model,

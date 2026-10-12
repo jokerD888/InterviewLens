@@ -22,7 +22,6 @@ def dependencies(monkeypatch):
     )
     monkeypatch.setattr(ans, "cache_get", AsyncMock(return_value=None))
     monkeypatch.setattr(ans, "cache_set", AsyncMock())
-    monkeypatch.setattr(ans, "incr_tokens", AsyncMock())
     monkeypatch.setattr(ans, "get_langfuse", lambda: lf)
     monkeypatch.setattr(
         ans,

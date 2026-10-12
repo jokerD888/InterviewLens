@@ -1,10 +1,16 @@
 """Bridge API unit tests — mocked answerer + httpx."""
+
 from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from interviewlens.api.routes_bridge import generate_answers, export_to_daily_prep
+
+
+@pytest.fixture(autouse=True)
+def isolate_read_cache(monkeypatch):
+    monkeypatch.setattr("interviewlens.api.cache.invalidate_read_caches", AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -24,8 +30,8 @@ async def test_generate_answers_uses_answerer(monkeypatch) -> None:
         async def execute(self, sql, params):
             m = MagicMock()
             m.all.return_value = [
-                (1, "什么是 GIL？", "Python"),
-                (2, "TCP 三次握手", "网络"),
+                (1, "什么是 GIL？", "Python", None, 0),
+                (2, "TCP 三次握手", "网络", None, 0),
             ]
             return m
 
@@ -84,6 +90,7 @@ async def test_generate_answers_missing_question() -> None:
 async def test_export_no_token_configured(monkeypatch) -> None:
     """Export fails with 502 when token is empty."""
     from interviewlens.api.routes_bridge import settings as bridge_settings
+
     monkeypatch.setattr(bridge_settings, "daily_prep_token", "")
 
     req_mock = MagicMock()

@@ -18,7 +18,13 @@ JOB_HEADERS = {
 
 def detail_endpoint(url: str) -> tuple[str, str, str] | None:
     parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != "www.nowcoder.com":
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "www.nowcoder.com"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+    ):
         return None
     match = re.fullmatch(r"/discuss/(\d+)/?", parsed.path)
     if match:
@@ -52,7 +58,7 @@ async def fetch_publication(url: str, fetcher) -> int | None:
     if not endpoint:
         return None
     await fetcher._limiter.acquire()
-    response = await fetcher._context.request.get(API_ROOT + endpoint[0], headers=JOB_HEADERS)
+    response = await fetcher._context.request.get(API_ROOT + endpoint[0], headers=JOB_HEADERS, max_redirects=0)
     check_status(response.status)
     return publication_ms(parse_detail_metadata(await response.json(), url))
 
@@ -60,9 +66,17 @@ async def fetch_publication(url: str, fetcher) -> int | None:
 async def fetch_job_page(page_no: int, fetcher, *, job_id: int = -1, level: int = 1):
     await fetcher._limiter.acquire()
     response = await fetcher._context.request.post(
-        API_ROOT + JOB_PATH, headers=JOB_HEADERS,
-        data={"companyList": [], "jobId": job_id, "level": level,
-              "order": 3, "page": page_no, "isNewJob": True},
+        API_ROOT + JOB_PATH,
+        headers=JOB_HEADERS,
+        max_redirects=0,
+        data={
+            "companyList": [],
+            "jobId": job_id,
+            "level": level,
+            "order": 3,
+            "page": page_no,
+            "isNewJob": True,
+        },
     )
     check_status(response.status)
     return parse_records(await response.json())

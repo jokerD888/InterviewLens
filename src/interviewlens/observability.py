@@ -4,6 +4,7 @@ The module is import-safe even when Langfuse / Redis are misconfigured —
 all helpers degrade to no-ops with a single warning rather than blowing up
 the pipeline.
 """
+
 from __future__ import annotations
 
 import time
@@ -187,6 +188,7 @@ async def reset_metrics() -> None:
 
 # ------------------------------------------------------------- Span helper
 
+
 @asynccontextmanager
 async def node_span(
     *,
@@ -215,3 +217,10 @@ async def node_span(
                 span.end()
         elapsed_ms = (time.perf_counter() - start) * 1000
         await record_node(node_name, elapsed_ms)
+
+
+async def close_redis():
+    global _redis_client
+    client, _redis_client = _redis_client, None
+    if client is not None:
+        await client.aclose()

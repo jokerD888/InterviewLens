@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 from typing import Annotated
-from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,18 +15,10 @@ from ..crawler.cleaner import strip_nowcoder_noise
 from ..db.position_profiles import save_profiles
 from ..position_taxonomy import PositionCategory, PositionProfile
 from .deps import get_session
+from .security import require_admin
 
-
-def local_editor(request: Request):
-    host = request.client.host if request.client else ""
-    try:
-        local = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        local = False
-    origin = request.headers.get("origin")
-    if not local or (origin and urlparse(origin).hostname not in {"localhost", "127.0.0.1", "::1"}):
-        raise HTTPException(403, "Position editor is local only")
-
+# Kept as an import alias for callers; all admin routes use the same guard.
+local_editor = require_admin
 
 router = APIRouter(prefix="/admin", tags=["position-editor"], dependencies=[Depends(local_editor)])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -147,4 +137,7 @@ async def correct_positions(post_id: int, body: Correction, session: Session):
     await save_profiles(session, post_id, profiles, author, overwrite_reviewed=True)
     result = (await editor_state(session, post_id))[2]
     await session.commit()
+    from .cache import invalidate_read_caches
+
+    await invalidate_read_caches()
     return result

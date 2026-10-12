@@ -1049,12 +1049,13 @@ def tab_crawl(
 @app.command(name="daily-update")
 def daily_update_cmd(
     no_answers: bool = typer.Option(False, "--no-answers", help="Skip AI answer generation (saves tokens)"),
+    no_crawl: bool = typer.Option(False, "--no-crawl", help="Process stored text without website requests"),
 ) -> None:
     """Full daily update: incremental crawl → extract → aggregate → answer.
 
     Serial, idempotent, reentrancy-locked. Wire this to the OS scheduler
     (Windows Task Scheduler / cron) to keep the site fresh without downtime —
-    read caches expire within 1h, so users see new content on next refresh.
+    changed questions are indexed and read caches are invalidated on commit.
 
     Example (Windows Task Scheduler action):
         uv run --directory D:\\code\\personal_learn\\InterviewLens il daily-update
@@ -1062,7 +1063,7 @@ def daily_update_cmd(
     from .tasks.daily import daily_update
 
     async def _run() -> None:
-        summary = await daily_update(with_answers=not no_answers)
+        summary = await daily_update(with_answers=not no_answers, with_crawl=not no_crawl)
         table = Table(title="daily-update", show_header=False)
         table.add_column("k", style="cyan")
         table.add_column("v")
@@ -1285,7 +1286,7 @@ def task_status(task_id: str = typer.Argument(...)) -> None:
 # ----------------------------------------------------------------- dlq
 @app.command()
 def dlq(
-    action: str = typer.Argument("list", help="list | drain | clear"),
+    action: str = typer.Argument("list", help="list | drain | restore | clear"),
     task_name: str = typer.Option("il.crawl_url", help="il.crawl_url | il.aggregate_pair"),
     limit: int = typer.Option(50),
 ) -> None:
@@ -1308,6 +1309,10 @@ def dlq(
     elif action == "clear":
         n = dlq_clear(task_name)
         console.print(f"[green]cleared {n} keys[/green]")
+    elif action == "restore":
+        from .tasks.pipeline import dlq_restore
+        n = dlq_restore(task_name, limit)
+        console.print(f"[green]restored {n} replay leftovers[/green]")
     else:
         console.print(f"[red]unknown action: {action}[/red]")
         raise typer.Exit(code=1)

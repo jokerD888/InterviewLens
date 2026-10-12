@@ -1,10 +1,10 @@
 """End-to-end orchestration: fetch → clean → persist (D2 scope only)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from .playwright_runner import NowcoderFetcher
-from .cleaner import clean_html
 from ..db import (
     mark_extract_status,
     session_scope,
@@ -12,6 +12,8 @@ from ..db import (
     upsert_raw_post,
 )
 from ..logging import log
+from .cleaner import clean_html
+from .playwright_runner import NowcoderFetcher
 
 
 @dataclass(slots=True)
@@ -51,6 +53,11 @@ async def crawl_one(
                 url=result.final_url,
                 title=result.title or cleaned.title,
                 raw_html=result.html,
+                posted_at=(
+                    datetime.fromtimestamp(result.published_ms / 1000, UTC).replace(tzinfo=None)
+                    if getattr(result, "published_ms", None)
+                    else None
+                ),
             )
             assert post.id is not None
 

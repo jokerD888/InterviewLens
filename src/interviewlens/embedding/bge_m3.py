@@ -7,6 +7,7 @@ Why bge-m3:
 
 ``EMBEDDING_VERSION`` increments whenever the embedding contract changes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -160,7 +161,7 @@ async def _embed_chunk_inferpilot(
 
 async def embed_texts(texts: Iterable[str]) -> np.ndarray:
     """Encode a list of texts → 2D numpy array (n, 1024), L2-normalised.
-    
+
     Robust Architecture:
     1. Sub-batches items to <= 32 to respect C++ server engine batch profile.
     2. Identifies sequences > 128 tokens and routes them to full-sequence PyTorch (zero silent truncation).
@@ -254,3 +255,18 @@ def cosine_matrix(query: np.ndarray, gallery: np.ndarray) -> np.ndarray:
     if query.size == 0 or gallery.size == 0:
         return np.zeros((query.shape[0], gallery.shape[0]), dtype=np.float32)
     return query @ gallery.T
+
+
+async def close_client():
+    global _inferpilot_client, _client_lock, _load_lock, _tok_lock
+    client, _inferpilot_client = _inferpilot_client, None
+    if client is not None:
+        await client.aclose()
+    _client_lock, _load_lock, _tok_lock = asyncio.Lock(), asyncio.Lock(), asyncio.Lock()
+
+
+def reset_clients():
+    global _inferpilot_client, _client_lock, _load_lock, _tok_lock, _model, _tokenizer
+    _inferpilot_client = None
+    _client_lock, _load_lock, _tok_lock = asyncio.Lock(), asyncio.Lock(), asyncio.Lock()
+    _model, _tokenizer = None, None

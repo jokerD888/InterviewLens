@@ -3,6 +3,7 @@
 Run via:
   uv run uvicorn interviewlens.api.app:app --reload --port 8000
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -10,12 +11,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ..config import settings
 from ..logging import log
 from .routes_admin import router as admin_router
 from .routes_bridge import router as bridge_router
 from .routes_feed import router as feed_router
-from .routes_position_profiles import router as profiles_router
 from .routes_position_editor import router as position_editor_router
+from .routes_position_profiles import router as profiles_router
 from .routes_search import router as search_router
 from .routes_summary import router as summary_router
 from .routes_taxonomy import router as taxonomy_router
@@ -31,7 +33,12 @@ async def lifespan(app: FastAPI):
         log.info("api.embedding_warmed")
     except Exception:  # noqa: BLE001  # ponytail: startup must not abort on model load; broad catch intentional
         log.warning("api.embedding_warm_failed", exc_info=True)
-    yield
+    try:
+        yield
+    finally:
+        from ..lifecycle import close_clients
+
+        await close_clients()
 
 
 app = FastAPI(
@@ -44,7 +51,7 @@ app = FastAPI(
 # Local-dev CORS — allow any origin so Next.js dev server (3000) can call.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.app_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

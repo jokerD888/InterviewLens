@@ -177,8 +177,7 @@ async def test_cancellation_propagates_and_releases_browser_and_lock(monkeypatch
 
 
 async def test_metadata_requests_share_batch_cap(monkeypatch):
-    items = [{"url": f"https://www.nowcoder.com/discuss/{i}", "record": {}}
-             for i in range(30)]
+    items = [{"url": f"https://www.nowcoder.com/discuss/{i}", "record": {}} for i in range(30)]
     store = fake_store(pending=items)
     monkeypatch.setattr(backfill, "fetch_detail", AsyncMock(return_value=("body", "title")))
     monkeypatch.setattr(backfill, "extract_post", lambda *_: {"created_at_ms": 0, "title": "title"})
@@ -193,50 +192,54 @@ async def test_metadata_requests_share_batch_cap(monkeypatch):
 
 
 async def test_unlimited_daily_mode_fetches_above_previous_cap(monkeypatch):
-    store = fake_store(attempts=1000, pending=[{"url": "https://www.nowcoder.com/discuss/1", "record": {}}])
+    store = fake_store(
+        attempts=1000, pending=[{"url": "https://www.nowcoder.com/discuss/1", "record": {}}]
+    )
     monkeypatch.setattr(backfill, "fetch_detail", AsyncMock(return_value=("body", "title")))
-    monkeypatch.setattr(backfill, "extract_post", lambda *_: {"created_at_ms": 1700000000000, "title": "title"})
+    monkeypatch.setattr(
+        backfill, "extract_post", lambda *_: {"created_at_ms": 1700000000000, "title": "title"}
+    )
     report = await backfill.backfill_batch(
-        store=store, fetcher_factory=fake_fetcher, limits=BackfillLimits(daily=None),
+        store=store,
+        fetcher_factory=fake_fetcher,
+        limits=BackfillLimits(daily=None),
     )
     assert report["status"] == "complete" and report["saved"] == 1
     store.reserve_attempt.assert_awaited_once_with("https://www.nowcoder.com/discuss/1", None)
 
 
-async def test_daily_stop_skips_model_pipeline_and_releases_redis_lock(monkeypatch):
+@pytest.mark.parametrize("crawl_status", ["stopped", "complete", "cooldown"])
+async def test_daily_processes_saved_data_even_when_listing_stops(monkeypatch, crawl_status):
     from interviewlens.agent import recovery
     from interviewlens.tasks import daily
-
-    redis = MagicMock()
-    redis.set.return_value = True
-    monkeypatch.setattr(daily.redis.Redis, "from_url", lambda *_args, **_kwargs: redis)
-    monkeypatch.setattr(
-        backfill, "backfill_batch", AsyncMock(return_value={"status": "stopped", "saved": 0})
-    )
-    resume = AsyncMock()
-    monkeypatch.setattr(recovery, "resume_failed", resume)
-    report = await daily.daily_update(with_answers=False)
-    assert report["crawl"]["status"] == "stopped"
-    resume.assert_not_awaited()
-    redis.delete.assert_called_once()
-
-
-async def test_daily_success_limits_extraction_to_pending_30(monkeypatch):
     from interviewlens import aggregator
-    from interviewlens.agent import recovery
-    from interviewlens.tasks import daily
+    from interviewlens.embedding import backfill as embed
+    from interviewlens.api import cache
 
     redis = MagicMock()
-    redis.set.return_value = True
-    monkeypatch.setattr(daily.redis.Redis, "from_url", lambda *_args, **_kwargs: redis)
+    redis.set = AsyncMock(return_value=True)
+    redis.eval, redis.aclose = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(daily.redis.Redis, "from_url", lambda *a, **kw: redis)
     monkeypatch.setattr(
-        backfill, "backfill_batch", AsyncMock(return_value={"status": "complete", "saved": 2})
+        backfill, "backfill_batch", AsyncMock(return_value={"status": crawl_status, "saved": 0})
     )
-    resume = AsyncMock(return_value=[])
+    resume = AsyncMock(return_value=[{"completed": True}, {"errors": ["failed"]}])
     monkeypatch.setattr(recovery, "resume_failed", resume)
     monkeypatch.setattr(aggregator, "aggregate_all", AsyncMock(return_value=[]))
-    await daily.daily_update(with_answers=False)
-    resume.assert_awaited_once_with(statuses=("pending",), limit=30)
+    monkeypatch.setattr(embed, "backfill_embeddings", AsyncMock(return_value=embed.BackfillStats()))
+    monkeypatch.setattr(cache, "invalidate_read_caches", AsyncMock())
+    report = await daily.daily_update(with_answers=False)
+    assert (
+        report["processing_attempted"] == 2
+        and report["extracted"] == 1
+        and report["processing_failed"] == 1
+    )
+    resume.assert_awaited_once_with(
+        statuses=("pending",), limit=30, stored_only=crawl_status != "complete"
+    )
+    assert redis.eval.await_count == 1
+    assert "redis.call('GET'" in redis.eval.await_args.args[0]
+    redis.aclose.assert_awaited_once()
 
 
 async def test_pacer_spaces_requests_and_adds_jitter(monkeypatch):
@@ -252,7 +255,7 @@ async def test_pacer_spaces_requests_and_adds_jitter(monkeypatch):
     monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(rate_limit.asyncio, "sleep", sleep)
     monkeypatch.setattr(rate_limit.random, "uniform", lambda *_args: 3.0)
-    limiter = backfill.make_fetcher()._limiter
+    limiter = backfill.make_fetcher()._limiter.local
     await limiter.acquire()
     first = clock[0]
     await limiter.acquire()

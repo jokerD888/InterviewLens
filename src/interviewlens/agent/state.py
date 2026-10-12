@@ -4,6 +4,7 @@ The state is a TypedDict with `total=False` so partial updates from each node
 get merged into the running state. Convention: nodes only WRITE the keys they
 own and only READ the keys produced by upstream nodes.
 """
+
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -38,6 +39,10 @@ class PipelineState(TypedDict, total=False):
     # Deprecated pipeline aliases; database/query code uses content_score.
     quality_score: int | None
     score_breakdown: dict[str, int] | None
+
+    processing_owner: str
+    completed_stages: dict[str, str]
+    indexed: int
 
     # ---- control flow --------------------------------------------------
     skip_reason: str | None

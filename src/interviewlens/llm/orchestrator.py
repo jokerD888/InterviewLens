@@ -1,23 +1,14 @@
-"""End-to-end extract orchestration: post_id → LLM → persist questions."""
+"""Compatibility entry point using the durable pipeline shared by Celery/resume."""
+
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 
-import openai
 from sqlmodel import select
 
-from ..db import (
-    Post,
-    mark_extract_status,
-    replace_questions,
-    session_scope,
-    set_interview_date,
-)
-from .extractor import extract_from_text
-from .prompts import get_extractor_prompt_version
+from ..config import settings
+from ..db import Post, mark_extract_status, session_scope
 from .schema import ExtractedPost
-from ..logging import log
 
 
 @dataclass(slots=True)
@@ -33,72 +24,30 @@ class ExtractOutcome:
 
 
 async def extract_post(post_id: int, *, use_cache: bool = True) -> ExtractOutcome:
-    """Read posts.cleaned_text → call Extractor → write questions table.
-
-    Updates ``posts.extract_status`` to 'done' on success or 'failed' on error.
-    Skips quietly when cleaned_text is missing.
-    """
+    """Process stored text, including recoverable normalization/scoring/indexing."""
     async with session_scope() as session:
-        post = (
-            await session.execute(select(Post).where(Post.id == post_id))
-        ).scalar_one_or_none()
+        post = (await session.execute(select(Post).where(Post.id == post_id))).scalar_one_or_none()
         if post is None:
             return ExtractOutcome(post_id=post_id, success=False, error="post not found")
-        cleaned = post.cleaned_text or ""
-
-    if not cleaned.strip():
-        async with session_scope() as session:
+        if not (post.cleaned_text or "").strip():
             await mark_extract_status(
                 session, post_id, status="skipped", error="empty_cleaned_text"
             )
-        return ExtractOutcome(
-            post_id=post_id, success=False, error="empty_cleaned_text"
-        )
+            return ExtractOutcome(post_id=post_id, success=False, error="empty_cleaned_text")
+        url = post.source_url
+    # Lazy import avoids the graph -> extractor -> llm import cycle.
+    from ..agent.graph import run_pipeline
 
-    try:
-        parsed, info = await extract_from_text(
-            cleaned, post_id=post_id, use_cache=use_cache
-        )
-    except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
-        # Layer C: external LLM/JSON failure → mark failed; logic bugs bubble.
-        log.error("extract.failed", post_id=post_id, exc_info=True)
-        async with session_scope() as session:
-            await mark_extract_status(
-                session,
-                post_id,
-                status="failed",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-        return ExtractOutcome(
-            post_id=post_id, success=False, error=f"{type(exc).__name__}: {exc}"
-        )
-
-    rounds_json = [r.model_dump() for r in parsed.rounds]
-
-    async with session_scope() as session:
-        inserted = await replace_questions(session, post_id, rounds_json)
-        await set_interview_date(session, post_id, parsed.interview_date)
-        await mark_extract_status(
-            session,
-            post_id,
-            status="done",
-            error=None,
-            version=get_extractor_prompt_version(),
-        )
-
-    log.info(
-        "extract.done",
-        post_id=post_id,
-        questions=inserted,
-        cache_hit=info.get("cache_hit"),
-        usage=info.get("usage"),
-    )
+    final = await run_pipeline(url, use_cache=use_cache, reuse_existing=True)
+    parsed = ExtractedPost.model_validate(final["extracted"]) if final.get("extracted") else None
+    error = final.get("skip_reason") or "; ".join(final.get("errors") or [])
     return ExtractOutcome(
         post_id=post_id,
-        success=True,
-        questions_inserted=inserted,
-        cache_hit=bool(info.get("cache_hit")),
-        usage=info.get("usage"),
-        model=info.get("model"),
+        success=not bool(error),
+        questions_inserted=parsed.total_questions if parsed else 0,
+        cache_hit=bool(final.get("extract_cache_hit")),
+        usage=final.get("extract_usage"),
+        model=settings.deepseek_model_chat,
+        error=error or None,
         parsed=parsed,
     )

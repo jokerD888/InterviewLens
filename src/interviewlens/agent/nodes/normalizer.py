@@ -3,6 +3,7 @@
 Maps each raw company / position string into a canonical id via the
 three-tier resolver, then writes the post_company_position links.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +16,7 @@ from ...db.position_profiles import save_post_companies
 from ...logging import log
 from ...normalizer import resolve_entity
 from ...observability import node_span
+from ..processing import fence_state
 from ..state import PipelineState
 
 NODE_NAME = "normalizer"
@@ -43,34 +45,47 @@ async def run(state: PipelineState, *, trace: Any | None = None) -> PipelineStat
         position_names: list[str] = list(dict.fromkeys(extracted.get("positions") or []))
 
         company_ids: list[int] = []
+        company_map = {}
+        position_map = {}
         for name in company_names:
             try:
                 r = await resolve_entity("company", name, trace=trace)
                 company_ids.append(r.canonical_id)
-            except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:  # noqa: BLE001
-                # Layer C: one alias failing externally shouldn't abort the rest,
-                # but logic bugs bubble up. See exception-handling-layering spec.
+                company_map[name] = r.canonical_id
+            except (openai.APIError, asyncio.TimeoutError, RuntimeError):  # noqa: BLE001
+                # Never replace old associations with a partial resolution.
                 log.warning("normalize.company_failed", alias=name, exc_info=True)
+                raise
 
         position_ids: list[int] = []
         for name in position_names:
             try:
                 r = await resolve_entity("position", name, trace=trace)
                 position_ids.append(r.canonical_id)
-            except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:  # noqa: BLE001
+                position_map[name] = r.canonical_id
+            except (openai.APIError, asyncio.TimeoutError, RuntimeError):  # noqa: BLE001
                 log.warning("normalize.position_failed", alias=name, exc_info=True)
+                raise
 
         # Deduplicate while preserving order
         company_ids = list(dict.fromkeys(company_ids))
         position_ids = list(dict.fromkeys(position_ids))
 
         async with session_scope() as session:
+            await fence_state(session, state)
             await save_post_companies(session, post_id, company_ids)
+            from ...db.attribution import save_attribution
+
+            author = (state.get("title") or "") + "\n" + (state.get("cleaned_text") or "")
+            pairs, mode = await save_attribution(
+                session, post_id, extracted, company_map, position_map, author
+            )
             n_links = await replace_post_links(
                 session,
                 post_id,
                 company_ids=company_ids,
                 position_ids=position_ids,
+                explicit_pairs=pairs if mode != "ambiguous" else None,
             )
 
         log.info(

@@ -1,4 +1,5 @@
 """Scorer node — pure function, runs after Normalizer."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -7,6 +8,7 @@ from ...db import session_scope, set_content_score
 from ...logging import log
 from ...observability import node_span
 from ...scoring import CONTENT_SCORE_VERSION, score_content
+from ..processing import fence_state
 from ..state import PipelineState
 
 NODE_NAME = "scorer"
@@ -27,6 +29,7 @@ async def run(state: PipelineState, *, trace: Any | None = None) -> PipelineStat
         breakdown = score_content(state.get("extracted"))
 
         async with session_scope() as session:
+            await fence_state(session, state)
             await set_content_score(
                 session,
                 post_id,

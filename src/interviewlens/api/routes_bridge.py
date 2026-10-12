@@ -1,8 +1,9 @@
 """/api/bridge — export selected questions + answers to daily-interview-prep."""
+
 from __future__ import annotations
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..answerer import generate_one
 from ..config import settings
@@ -11,12 +12,13 @@ from ..logging import log
 from .schemas import (
     BridgeExportRequest,
     BridgeExportResponse,
+    BridgeGeneratedAnswer,
     BridgeGenerateRequest,
     BridgeGenerateResponse,
-    BridgeGeneratedAnswer,
 )
+from .security import require_admin
 
-router = APIRouter(prefix="/bridge", tags=["bridge"])
+router = APIRouter(dependencies=[Depends(require_admin)], prefix="/bridge", tags=["bridge"])
 
 
 @router.post("/generate-answers", response_model=BridgeGenerateResponse)
@@ -28,14 +30,14 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
         from sqlalchemy import text as sa_text
 
         sql = sa_text(
-            "SELECT id, content, category FROM questions WHERE id = ANY(:ids)"
+            "SELECT id, content, category, answer_ai, answer_ai_version FROM questions WHERE id = ANY(:ids)"
         )
-        rows = (
-            await session.execute(sql, {"ids": req.question_ids})
-        ).all()
-        qmap = {r[0]: {"content": r[1], "category": r[2]} for r in rows}
+        rows = (await session.execute(sql, {"ids": req.question_ids})).all()
+        qmap = {
+            r[0]: {"content": r[1], "category": r[2], "answer": r[3], "version": r[4]} for r in rows
+        }
 
-    for qid in req.question_ids:
+    for qid in dict.fromkeys(req.question_ids):
         q = qmap.get(qid)
         if q is None:
             results.append(
@@ -46,9 +48,18 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
                 )
             )
             continue
-        answer = await generate_one(
-            content=q["content"], category=q["category"]
+        from ..llm.budget import LLMLimitError
+
+        answer = (
+            q["answer"]
+            if q["version"] >= settings.answer_prompt_version and not req.regenerate
+            else None
         )
+        if not answer:
+            try:
+                answer = await generate_one(content=q["content"], category=q["category"])
+            except LLMLimitError as exc:
+                raise HTTPException(429, str(exc)) from exc
         if answer is None:
             results.append(
                 BridgeGeneratedAnswer(
@@ -65,11 +76,20 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
             async with session_scope() as wsession:
                 await wsession.execute(
                     sa_text(
-                        "UPDATE questions SET answer_ai = :ans, answer_ai_version = :ver WHERE id = :qid"
+                        "UPDATE questions SET answer_ai = :ans, answer_ai_version = :ver WHERE id = :qid AND content=:content AND category IS NOT DISTINCT FROM :category"
                     ),
-                    {"ans": answer, "ver": settings.answer_prompt_version, "qid": qid},
+                    {
+                        "ans": answer,
+                        "ver": settings.answer_prompt_version,
+                        "qid": qid,
+                        "content": q["content"],
+                        "category": q["category"],
+                    },
                 )
                 await wsession.commit()
+            from .cache import invalidate_read_caches
+
+            await invalidate_read_caches()
         except Exception:  # noqa: BLE001  # ponytail: DB write is best-effort here; don't fail the whole bridge call
             log.error("bridge.write_answer_ai_failed", qid=qid, exc_info=True)
 
@@ -89,6 +109,9 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
             )
         )
 
+    from .cache import invalidate_read_caches
+
+    await invalidate_read_caches()
     return BridgeGenerateResponse(answers=results)
 
 

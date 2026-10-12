@@ -1,4 +1,5 @@
 """Unit tests for /posts/search many-to-many deduplication via EXISTS subqueries."""
+
 from __future__ import annotations
 
 import re
@@ -30,9 +31,15 @@ async def test_search_uses_exists_and_avoids_cartesian_join(monkeypatch):
 
     # Mock embed_texts to return dummy 384-dim vector
     fake_vec = np.ones((1, 384), dtype=np.float32)
-    monkeypatch.setattr("interviewlens.api.routes_search.embed_texts", AsyncMock(return_value=fake_vec))
-    monkeypatch.setattr("interviewlens.api.routes_search._result_cache_get", AsyncMock(return_value=None))
-    monkeypatch.setattr("interviewlens.api.routes_search._embed_cache_get", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search.embed_texts", AsyncMock(return_value=fake_vec)
+    )
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search._result_cache_get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search._embed_cache_get", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr("interviewlens.api.routes_search._result_cache_set", AsyncMock())
     monkeypatch.setattr("interviewlens.api.routes_search._embed_cache_set", AsyncMock())
     monkeypatch.setattr("interviewlens.api.routes_search.incr_cache", AsyncMock())
@@ -42,8 +49,8 @@ async def test_search_uses_exists_and_avoids_cartesian_join(monkeypatch):
     sql1 = captured_sqls[-1]
     # Must use EXISTS subquery
     assert "EXISTS" in sql1
-    assert "pcp_c.company_id" in sql1
-    assert "pcp_c.post_id = po.id" in sql1
+    assert "qi.question_id=q.id" in sql1
+    assert "pcp.post_id=q.post_id" in sql1
     # Must NOT have outer JOIN on post_company_position
     assert "FROM questions q\n    JOIN posts po ON po.id = q.post_id\n    WHERE" in sql1
     assert captured_params[-1]["company"] == "字节跳动"
@@ -52,17 +59,17 @@ async def test_search_uses_exists_and_avoids_cartesian_join(monkeypatch):
     await search(q="分布式锁", position="后端开发", session=mock_session)
     sql2 = captured_sqls[-1]
     assert "EXISTS" in sql2
-    assert "pcp_p.position_id" in sql2
-    assert "pcp_p.post_id = po.id" in sql2
+    assert "qi.question_id=q.id" in sql2
+    assert "pcp.post_id=q.post_id" in sql2
     assert "FROM questions q\n    JOIN posts po ON po.id = q.post_id\n    WHERE" in sql2
     assert captured_params[-1]["position"] == "后端开发"
 
     # Case 3: Search with both company and position
     await search(q="分布式锁", company="字节跳动", position="后端开发", session=mock_session)
     sql3 = captured_sqls[-1]
-    assert sql3.count("EXISTS") == 2
+    assert "post_attribution" in sql3
     assert "c.canonical = :company" in sql3
-    assert "p.canonical = :position" in sql3
+    assert "pos.canonical = :position" in sql3
     # Main FROM clause remains purely 1-to-1 between questions and posts
     assert "FROM questions q\n    JOIN posts po ON po.id = q.post_id\n    WHERE" in sql3
 
@@ -111,9 +118,15 @@ async def test_search_results_unique_per_question(monkeypatch):
     mock_session.execute = AsyncMock(return_value=mock_result)
 
     fake_vec = np.ones((1, 384), dtype=np.float32)
-    monkeypatch.setattr("interviewlens.api.routes_search.embed_texts", AsyncMock(return_value=fake_vec))
-    monkeypatch.setattr("interviewlens.api.routes_search._result_cache_get", AsyncMock(return_value=None))
-    monkeypatch.setattr("interviewlens.api.routes_search._embed_cache_get", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search.embed_texts", AsyncMock(return_value=fake_vec)
+    )
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search._result_cache_get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "interviewlens.api.routes_search._embed_cache_get", AsyncMock(return_value=None)
+    )
     monkeypatch.setattr("interviewlens.api.routes_search._result_cache_set", AsyncMock())
     monkeypatch.setattr("interviewlens.api.routes_search._embed_cache_set", AsyncMock())
     monkeypatch.setattr("interviewlens.api.routes_search.incr_cache", AsyncMock())

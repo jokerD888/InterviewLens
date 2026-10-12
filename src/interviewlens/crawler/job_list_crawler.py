@@ -3,6 +3,7 @@
 Both discussions and moments are supported. Server totalPage is not proof
 that all those pages are accessible; repeated pages mean an incomplete scan.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,6 +18,7 @@ from ..logging import log
 from .rate_limit import AsyncRateLimiter
 from .record_metadata import page_fingerprint, publication_ms
 from .response_guard import CrawlStoppedError, check_status, parse_records
+from .site_limiter import SiteLimiter, pause_site
 
 API_URL = "https://gw-c.nowcoder.com/api/sparta/job-experience/experience/job/list"
 UTC8 = timezone(timedelta(hours=8))
@@ -104,7 +106,7 @@ async def crawl_job_list(
     """
     if not 1 <= pages <= 500 or job_level not in (1, 2, 3):
         raise ValueError("pages must be 1..500; job_level must be 1..3")
-    limiter = AsyncRateLimiter(rate_per_sec=1 / max(10.0, delay), jitter=(1, 10))
+    limiter = SiteLimiter(AsyncRateLimiter(rate_per_sec=1 / max(10.0, delay), jitter=(1, 10)))
     stop_reason = "page_budget"
     fingerprints: set[str] = set()
     all_results: list[dict] = []
@@ -116,11 +118,14 @@ async def crawl_job_list(
         out_path = Path(output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_file = out_path.open("w", encoding="utf-8")
-        header = json.dumps({
-            "crawled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "api_endpoint": API_URL,
-            "source": "job_list",
-        }, ensure_ascii=False)
+        header = json.dumps(
+            {
+                "crawled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "api_endpoint": API_URL,
+                "source": "job_list",
+            },
+            ensure_ascii=False,
+        )
         out_file.write(header + "\n")
         out_file.flush()
 
@@ -193,7 +198,13 @@ async def crawl_job_list(
                         out_file.write(json.dumps(post, ensure_ascii=False) + "\n")
                         out_file.flush()
 
-                log.info("job_list.page", page=page, records=len(records), new=new, total=len(all_results))
+                log.info(
+                    "job_list.page",
+                    page=page,
+                    records=len(records),
+                    new=new,
+                    total=len(all_results),
+                )
 
                 # Filtering a page outside until does not mean there are no
                 # older matches. Only raw page identities detect pagination loops.
@@ -201,21 +212,30 @@ async def crawl_job_list(
 
     except CrawlStoppedError as exc:
         stop_reason = exc.reason
+        await pause_site(exc.reason)
         raise
     except KeyboardInterrupt:
         stop_reason = "interrupted"
         log.info("job_list.interrupted", saved=len(all_results))
     finally:
         if out_file:
-            trailer = json.dumps({
-                "total": len(all_results),
-                "stop_reason": stop_reason,
-                "complete": stop_reason == "empty_page",
-                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }, ensure_ascii=False)
+            trailer = json.dumps(
+                {
+                    "total": len(all_results),
+                    "stop_reason": stop_reason,
+                    "complete": stop_reason == "empty_page",
+                    "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                ensure_ascii=False,
+            )
             out_file.write(trailer + "\n")
             out_file.close()
-            log.info("job_list.saved", path=str(out_path), posts=len(all_results), size=out_path.stat().st_size)
+            log.info(
+                "job_list.saved",
+                path=str(out_path),
+                posts=len(all_results),
+                size=out_path.stat().st_size,
+            )
 
     log.info("job_list.done", posts=len(all_results))
     return all_results

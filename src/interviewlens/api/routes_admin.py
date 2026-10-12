@@ -1,7 +1,9 @@
 """/admin — health probe + jobs panel + manual ingest."""
+
 from __future__ import annotations
 
 import json
+import asyncio
 
 import redis
 from fastapi import APIRouter, Body, Depends
@@ -13,8 +15,9 @@ from ..errors import swallow
 from ..observability import fetch_metrics
 from .deps import get_session
 from .schemas import HealthOut, JobsOut
+from .security import require_admin
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(dependencies=[Depends(require_admin)], prefix="/admin", tags=["admin"])
 
 
 @router.get("/health", response_model=HealthOut)
@@ -34,8 +37,17 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthOut:
 
     redis_ok = False
     try:
-        r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
-        redis_ok = bool(r.ping())
+
+        def check_redis():
+            with redis.Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                socket_timeout=2,
+                socket_connect_timeout=2,
+            ) as r:
+                return bool(r.ping())
+
+        redis_ok = await asyncio.to_thread(check_redis)
     except Exception:  # noqa: BLE001  # ponytail: health probe — broad catch by design
         redis_ok = False
 
@@ -95,13 +107,23 @@ async def metrics_endpoint() -> dict:
 
 
 @router.post("/ingest")
-def ingest(payload: dict = Body(..., examples=[{"url": "https://www.nowcoder.com/discuss/123"}])) -> dict:
+def ingest(
+    payload: dict = Body(..., examples=[{"url": "https://www.nowcoder.com/discuss/123"}]),
+) -> dict:
     """Enqueue one URL via Celery. Self-only convenience for the dashboard."""
     from ..tasks import crawl_url
 
     url = payload.get("url")
     if not url:
         return {"ok": False, "error": "missing url"}
+    from fastapi import HTTPException
+
+    from ..crawler.urls import validate_post_url
+
+    try:
+        validate_post_url(url)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Only HTTPS Nowcoder post URLs are accepted")
     res = crawl_url.delay(url)
     return {"ok": True, "task_id": res.id, "url": url}
 

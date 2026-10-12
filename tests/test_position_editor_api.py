@@ -9,13 +9,16 @@ from interviewlens.api.deps import get_session
 from interviewlens.api.routes_position_editor import local_editor
 
 
-def test_local_editor_rejects_cross_site_origin_but_accepts_own_ui():
+def test_editor_requires_token_even_on_loopback(monkeypatch):
+    from interviewlens.config import settings
+
+    monkeypatch.setattr(settings, "admin_api_token", "test-" + "x" * 40)
     local_editor(
         Request(
             {
                 "type": "http",
                 "client": ("127.0.0.1", 50000),
-                "headers": [(b"origin", b"http://127.0.0.1:3013")],
+                "headers": [(b"authorization", ("Bearer " + settings.admin_api_token).encode())],
             }
         )
     )
@@ -29,17 +32,20 @@ def test_local_editor_rejects_cross_site_origin_but_accepts_own_ui():
                 }
             )
         )
-    assert error.value.status_code == 403
+    assert error.value.status_code == 401
 
 
-def test_editor_blocks_remote_access_and_cross_site_writes():
+def test_editor_blocks_unauthenticated_remote_and_cross_site_writes(monkeypatch):
+    from interviewlens.config import settings
+
+    monkeypatch.setattr(settings, "admin_api_token", "test-" + "x" * 40)
     client = TestClient(app)
-    assert client.get("/admin/position-posts").status_code == 403
+    assert client.get("/admin/position-posts").status_code == 401
     assert (
         client.put(
             "/admin/posts/1/position-profiles", headers={"Origin": "https://evil.example"}, json={}
         ).status_code
-        == 403
+        == 401
     )
 
 

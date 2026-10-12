@@ -27,7 +27,8 @@ async def test_until_filtered_pages_do_not_stop_discovery_and_repeated_pages_do(
     original = httpx.AsyncClient
     monkeypatch.setattr(crawler.httpx, "AsyncClient",
         lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs))
-    monkeypatch.setattr(crawler.AsyncRateLimiter, "acquire", AsyncMock())
+    monkeypatch.setattr(crawler.SiteLimiter, "acquire", AsyncMock())
+    monkeypatch.setattr(crawler, "pause_site", AsyncMock())
     path = tmp_path / "export.jsonl"
     result = await crawler.crawl_job_list(pages=10, until=datetime(2026, 7, 25),
         output_path=str(path))

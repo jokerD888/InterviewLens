@@ -7,12 +7,12 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@11.25.0
 
 # Force flat node_modules (pnpm default isolation breaks Next.js bin resolution)
 RUN echo "node-linker=hoisted" > .npmrc
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
@@ -27,10 +27,10 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@11.25.0
 RUN echo "node-linker=hoisted" > .npmrc
 
-COPY --from=builder /app/package.json /app/pnpm-lock.yaml ./
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=builder /app/.next ./.next

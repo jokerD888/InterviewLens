@@ -1,11 +1,13 @@
 """High-level Extractor: cleaned_text → ExtractedPost (cached)."""
+
 from __future__ import annotations
 
 from typing import Any
 
+from ..config import settings
 from ..crawler.cleaner import strip_nowcoder_noise
 from ..logging import log
-from ..observability import incr_cache, incr_tokens
+from ..observability import incr_cache
 from ..position_taxonomy import PositionProfile, validate_evidence
 from .cache import cache_get, cache_set, make_cache_key
 from .deepseek import ToolCallResult, call_tool
@@ -37,7 +39,11 @@ async def extract_from_text(
     version = get_extractor_prompt_version()
     cache_key = make_cache_key(
         namespace="extract",
-        payload={"text": cleaned_text},
+        payload={
+            "text": cleaned_text,
+            "model": settings.deepseek_model_chat,
+            "schema": EXTRACT_FUNCTION_SCHEMA,
+        },
         version=version,
     )
 
@@ -47,7 +53,9 @@ async def extract_from_text(
             log.info("extract.cache_hit", post_id=post_id, key=cache_key[-12:])
             await incr_cache(hit=True)
             parsed = ExtractedPost.model_validate(cached["arguments"])
-            parsed.position_profiles = [validate_evidence(p, cleaned_text) for p in parsed.position_profiles]
+            parsed.position_profiles = [
+                validate_evidence(p, cleaned_text) for p in parsed.position_profiles
+            ]
             if not parsed.position_profiles:
                 parsed.position_profiles = [PositionProfile()]
             return parsed, {
@@ -83,8 +91,34 @@ async def extract_from_text(
         args["level"] = "社招"
 
     # Normalise round_type and category: fallback to "其他" when LLM invents values
-    valid_round_types = {"技术一面", "技术二面", "技术三面", "技术四面", "技术五面", "HR面", "交叉面", "笔试", "主管面", "其他"}
-    valid_categories = {"算法", "数据结构", "系统设计", "数据库", "操作系统", "网络", "语言基础", "项目", "深度学习", "计算机体系结构", "AI基础", "大模型", "HR", "其他"}
+    valid_round_types = {
+        "技术一面",
+        "技术二面",
+        "技术三面",
+        "技术四面",
+        "技术五面",
+        "HR面",
+        "交叉面",
+        "笔试",
+        "主管面",
+        "其他",
+    }
+    valid_categories = {
+        "算法",
+        "数据结构",
+        "系统设计",
+        "数据库",
+        "操作系统",
+        "网络",
+        "语言基础",
+        "项目",
+        "深度学习",
+        "计算机体系结构",
+        "AI基础",
+        "大模型",
+        "HR",
+        "其他",
+    }
     for rd in args.get("rounds") or []:
         if rd.get("round_type") and rd["round_type"] not in valid_round_types:
             log.info("extractor.normalized_round_type", value=rd["round_type"])
@@ -95,15 +129,11 @@ async def extract_from_text(
                 q["category"] = "其他"
 
     parsed = ExtractedPost.model_validate(args)
-    parsed.position_profiles = [validate_evidence(p, cleaned_text) for p in parsed.position_profiles]
+    parsed.position_profiles = [
+        validate_evidence(p, cleaned_text) for p in parsed.position_profiles
+    ]
     if not parsed.position_profiles:
         parsed.position_profiles = [PositionProfile()]
-
-    if result.usage:
-        await incr_tokens(
-            prompt=int(result.usage.get("prompt_tokens") or 0),
-            completion=int(result.usage.get("completion_tokens") or 0),
-        )
 
     if use_cache:
         await cache_set(

@@ -5,6 +5,7 @@ AttributeError / KeyError surface (bubble to the DLQ) instead of being silently
 degraded. Only external/LLM failures (openai.APIError, RuntimeError, timeout)
 are caught and downgraded to tier4.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +20,7 @@ import interviewlens.normalizer.resolver as res
 @pytest.mark.asyncio
 async def test_logic_bug_bubbles_out_of_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
     """A TypeError from call_tool must propagate, NOT be swallowed to tier4."""
+
     # Force the path to reach tier3 (LLM call): no alias hit, no canonicals.
     async def _no_alias(entity_type, alias):
         return None
@@ -38,8 +40,9 @@ async def test_logic_bug_bubbles_out_of_resolve(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_llm_failure_degrades_to_new_canonical(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An openai.APIError (external) IS swallowed → falls through to tier4 (new)."""
+async def test_llm_failure_does_not_teach_new_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An outage retains stage failure rather than manufacturing an identity."""
+
     async def _no_alias(entity_type, alias):
         return None
 
@@ -60,15 +63,17 @@ async def test_llm_failure_degrades_to_new_canonical(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(res, "call_tool", _api_error)
     monkeypatch.setattr(res, "_persist_new_canonical", _persist_new)
 
-    result = await res.resolve_entity("company", "字节跳动")
-    assert result.source == "new"
-    assert result.canonical_id == 42
-    assert created  # a new canonical was created (degraded path taken)
+    with pytest.raises(openai.APIConnectionError):
+        await res.resolve_entity("company", "字节跳动")
+    assert not created
 
 
 @pytest.mark.asyncio
-async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_llm_id_for_wrong_entity_type_falls_back_to_new(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A guessed id must be validated against the requested entity table."""
+
     async def _no_alias(entity_type, alias):
         return None
 
@@ -100,6 +105,7 @@ async def test_llm_id_for_wrong_entity_type_falls_back_to_new(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_alias_conflict_returns_database_winner(monkeypatch: pytest.MonkeyPatch) -> None:
     """A losing resolver must use the canonical already stored for the alias."""
+
     async def _no_alias(entity_type, alias):
         return None
 

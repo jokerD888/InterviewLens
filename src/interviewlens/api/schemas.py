@@ -1,4 +1,5 @@
 """Pydantic response schemas for the public API."""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -90,8 +91,10 @@ class HealthOut(BaseModel):
 
 # ---------------------------------------------------------------- Bridge
 
+
 class BridgeGenerateRequest(BaseModel):
     question_ids: list[int] = Field(min_length=1, max_length=50)
+    regenerate: bool = False
 
 
 class BridgeGeneratedAnswer(BaseModel):
@@ -125,6 +128,7 @@ class BridgeExportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------- Feed
+
 
 class FeedQuestionOut(BaseModel):
     id: int

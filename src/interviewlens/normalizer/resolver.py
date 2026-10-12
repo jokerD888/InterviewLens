@@ -7,6 +7,7 @@ The function self-learns at the data layer: embedding/LLM matches and new
 canonicals write an alias mapping back to the entity-specific alias table so
 later calls can short-circuit. This does not update model parameters.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,11 +26,15 @@ from ..llm.prompts import NORMALIZE_FUNCTION_SCHEMA, build_normalizer_messages
 from ..logging import log
 from .rules import has_lexical_anchor, is_entity_incompatible
 
-EMBED_THRESHOLD_AUTO_MATCH: float = 0.92  # >= this AND lexical anchor AND not incompatible → auto-match
+EMBED_THRESHOLD_AUTO_MATCH: float = (
+    0.92  # >= this AND lexical anchor AND not incompatible → auto-match
+)
 EMBED_THRESHOLD_HIGH: float = EMBED_THRESHOLD_AUTO_MATCH  # backward-compatible alias
-EMBED_THRESHOLD_LOW: float = 0.55         # below this → no candidate sent to LLM
-LLM_MIN_CONFIDENCE: float = 0.70          # below this → fall back to new canonical
-REVIEW_CONFIDENCE_THRESHOLD: float = 0.85 # between 0.70 and 0.85 or weak lexical anchor → flagged for review
+EMBED_THRESHOLD_LOW: float = 0.55  # below this → no candidate sent to LLM
+LLM_MIN_CONFIDENCE: float = 0.70  # below this → fall back to new canonical
+REVIEW_CONFIDENCE_THRESHOLD: float = (
+    0.85  # between 0.70 and 0.85 or weak lexical anchor → flagged for review
+)
 TOP_K: int = 5
 
 
@@ -43,6 +48,7 @@ class ResolveResult:
 
 
 # --------------------------------------------------------------- helpers
+
 
 def _model_for(entity_type: str):
     if entity_type == "company":
@@ -60,15 +66,17 @@ def _alias_spec(entity_type: str):
     raise ValueError(f"unknown entity_type: {entity_type}")
 
 
-async def _lookup_alias(entity_type: str, alias: str) -> int | None:
+async def _lookup_alias(entity_type: str, alias: str) -> tuple[int, float] | None:
     AliasModel, canonical_field = _alias_spec(entity_type)
     async with session_scope() as session:
         row = (
             await session.execute(
-                select(getattr(AliasModel, canonical_field)).where(AliasModel.alias == alias)
+                select(getattr(AliasModel, canonical_field), AliasModel.confidence).where(
+                    AliasModel.alias == alias
+                )
             )
-        ).scalar_one_or_none()
-    return int(row) if row is not None else None
+        ).first()
+    return (int(row[0]), float(row[1])) if row is not None else None
 
 
 async def _search_canonicals(entity_type: str, alias: str) -> list[dict[str, float | int | str]]:
@@ -135,9 +143,8 @@ async def _claim_alias(
         **{canonical_field: canonical_id},
         confidence=confidence,
     )
-    stmt = (
-        stmt.on_conflict_do_nothing(index_elements=["alias"])
-        .returning(getattr(AliasModel, canonical_field), AliasModel.confidence)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["alias"]).returning(
+        getattr(AliasModel, canonical_field), AliasModel.confidence
     )
     row = (await session.execute(stmt)).first()
     if row is not None:
@@ -191,9 +198,7 @@ async def _get_or_create_canonical(
     if row is not None:
         return int(row[0]), True
 
-    existing = (
-        await session.execute(select(Model).where(Model.canonical == name))
-    ).scalar_one()
+    existing = (await session.execute(select(Model).where(Model.canonical == name))).scalar_one()
     if embedding is not None and (
         existing.embedding is None
         or existing.embedding_model != settings.embedding_model
@@ -223,7 +228,6 @@ async def _get_canonical_name(entity_type: str, canonical_id: int) -> str | None
             await session.execute(select(Model.canonical).where(Model.id == canonical_id))
         ).scalar_one_or_none()
     return str(row) if row is not None else None
-
 
 
 async def _persist_new_canonical(
@@ -272,6 +276,7 @@ async def _persist_new_canonical(
 
 # ---------------------------------------------------------------- main
 
+
 async def resolve_entity(
     entity_type: str,
     alias: str,
@@ -291,10 +296,11 @@ async def resolve_entity(
         raise ValueError("alias cannot be empty")
 
     # --- tier 1: dictionary
-    canonical_id = await _lookup_alias(entity_type, alias)
-    if canonical_id is not None:
+    alias_hit = await _lookup_alias(entity_type, alias)
+    if alias_hit is not None:
+        canonical_id, confidence = alias_hit
         log.info("normalize.tier1_hit", entity_type=entity_type, alias=alias, id=canonical_id)
-        return ResolveResult(canonical_id=canonical_id, confidence=1.0, source="alias")
+        return ResolveResult(canonical_id=canonical_id, confidence=confidence, source="alias")
 
     # --- tier 2: embedding
     top = await _search_canonicals(entity_type, alias)
@@ -371,12 +377,11 @@ async def resolve_entity(
             max_tokens=512,
         )
         decision = result.arguments
-    except (openai.APIError, asyncio.TimeoutError, RuntimeError) as exc:
-        # Layer C: only external/LLM failures degrade to tier4.
-        # Logic bugs (TypeError/AttributeError/KeyError) bubble up to the DLQ —
-        # ponytail: intentional narrowing, see exception-handling-layering spec.
+    except (openai.APIError, asyncio.TimeoutError, RuntimeError):
+        # Provider/budget failure is not evidence of a new canonical identity.
+        # Keep the stage recoverable rather than teaching a false alias.
         log.warning("normalize.llm_failed", alias=alias, exc_info=True)
-        decision = None
+        raise
 
     if decision and decision.get("decision") == "match" and decision.get("canonical_id"):
         try:
@@ -410,9 +415,7 @@ async def resolve_entity(
             else:
                 has_anchor = has_lexical_anchor(alias, chosen_name) if chosen_name else False
                 needs_review = (conf < REVIEW_CONFIDENCE_THRESHOLD) or (not has_anchor)
-                review_reason = (
-                    "llm_low_confidence_or_weak_lexical_anchor" if needs_review else ""
-                )
+                review_reason = "llm_low_confidence_or_weak_lexical_anchor" if needs_review else ""
 
                 winner_id, winner_confidence, claimed = await _write_alias(
                     entity_type,
@@ -436,7 +439,6 @@ async def resolve_entity(
                     needs_review=needs_review,
                     review_reason=review_reason,
                 )
-
 
     # --- tier 4: create a new canonical
     new_name = (decision or {}).get("canonical_name") or alias

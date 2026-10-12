@@ -1,4 +1,5 @@
 """/posts/search and /posts/{id} — semantic question search via pgvector."""
+
 from __future__ import annotations
 
 import base64
@@ -14,8 +15,10 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from ..db.processing_reads import READY_POST_SQL
 from ..config import settings
 from ..db import Post
+from ..db.attribution import question_scope_sql
 from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..logging import log
 from ..observability import get_redis, incr_cache
@@ -46,11 +49,15 @@ def _embed_key(q: str) -> str:
 
 def _result_key(q: str, filters: dict) -> str:
     facet_defaults = {
-        "position_category": None, "specializations": [], "domains": [], "skills": [],
-        "include_unreviewed": False, "taxonomy_version": TAXONOMY_VERSION,
+        "position_category": None,
+        "specializations": [],
+        "domains": [],
+        "skills": [],
+        "include_unreviewed": False,
+        "taxonomy_version": TAXONOMY_VERSION,
     }
     canonical = json.dumps(
-        {"q": q, "freshness_policy": FRESHNESS_POLICY_VERSION, **facet_defaults, **filters},
+        {"q": q, "freshness_policy": FRESHNESS_POLICY_VERSION, "data_policy": 2, **facet_defaults, **filters},
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -84,35 +91,19 @@ async def _embed_cache_set(key: str, vec: np.ndarray) -> None:
 
 
 async def _result_cache_get(key: str) -> list[dict] | None:
-    try:
-        r = get_redis()
-        raw = await r.get(key)
-        if raw is None:
-            return None
-        return json.loads(raw)
-    except (aioredis.RedisError, json.JSONDecodeError):
-        log.warning("search.result_cache_get_failed", exc_info=True)
-        return None
+    from .cache import cache_json_get
+    return await cache_json_get(key, redis_client=get_redis())
 
 
 async def _result_cache_set(key: str, rows: list[dict]) -> None:
-    try:
-        r = get_redis()
-        await r.set(
-            key,
-            json.dumps(rows, ensure_ascii=False),
-            ex=settings.search_result_ttl_seconds,
-        )
-    except aioredis.RedisError:
-        log.warning("search.result_cache_set_failed", exc_info=True)
-
-
-# ----------------------------------------------------------------- routes
+    from .cache import cache_json_set
+    await cache_json_set(key, rows, ttl_seconds=settings.search_result_ttl_seconds,
+                         redis_client=get_redis())
 
 
 @router.get("/posts/search", response_model=list[QuestionOut])
 async def search(
-    q: str = Query(..., min_length=2, description="Free-text query"),
+    q: str = Query(..., min_length=2, max_length=1000, description="Free-text query"),
     company: str | None = None,
     position: str | None = None,
     position_category: PositionCategory | None = None,
@@ -144,7 +135,15 @@ async def search(
         "taxonomy_version": TAXONOMY_VERSION,
     }
     facet_params: dict[str, object] = {}
-    predicate = profile_predicate(position_category, specializations, domains, skills, include_unreviewed, facet_params)
+    predicate = profile_predicate(
+        position_category,
+        specializations,
+        domains,
+        skills,
+        include_unreviewed,
+        facet_params,
+        question_scope=True,
+    )
 
     if settings.search_cache_enabled and not predicate:
         # Layer 2: full result cache
@@ -174,6 +173,7 @@ async def search(
     vec_str = "[" + ",".join(f"{v:.6f}" for v in qvec[0].tolist()) + "]"
 
     clauses = [
+        READY_POST_SQL, "po.extract_status = 'done'",
         "q.embedding IS NOT NULL",
         "q.embedding_model = :embedding_model",
         "q.embedding_version = :embedding_version",
@@ -190,24 +190,13 @@ async def search(
     if predicate:
         clauses.append(predicate)
         params.update(facet_params)
-    if company:
+    if company or position:
         clauses.append(
-            "EXISTS ("
-            "SELECT 1 FROM post_companies pcp_c "
-            "JOIN companies c ON c.id = pcp_c.company_id "
-            "WHERE pcp_c.post_id = po.id AND c.canonical = :company"
-            ")"
+            question_scope_sql(
+                company=":company" if company else None, position=":position" if position else None
+            )
         )
-        params["company"] = company
-    if position:
-        clauses.append(
-            "EXISTS ("
-            "SELECT 1 FROM post_company_position pcp_p "
-            "JOIN positions p ON p.id = pcp_p.position_id "
-            "WHERE pcp_p.post_id = po.id AND p.canonical = :position"
-            ")"
-        )
-        params["position"] = position
+        params.update({"company": company, "position": position})
     if min_quality > 0:
         clauses.append("COALESCE(po.content_score, 0) >= :min_q")
 
@@ -224,7 +213,7 @@ async def search(
            1 - (q.embedding <=> CAST(:vec AS vector)) AS similarity
     FROM questions q
     {joins}
-    WHERE {' AND '.join(clauses)}
+    WHERE {" AND ".join(clauses)}
     ORDER BY q.embedding <=> CAST(:vec AS vector)
     LIMIT :limit
     """
@@ -270,7 +259,9 @@ async def get_post(
         ranking_score=ranking_score(
             post.content_score or 0,
             freshness,
-        ) if post.content_score is not None else None,
+        )
+        if post.content_score is not None
+        else None,
         quality_score=post.content_score,
         companies=list(row["companies"] or []) if row else [],
         positions=list(row["positions"] or []) if row else [],

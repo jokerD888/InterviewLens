@@ -1,11 +1,18 @@
 """Async DeepSeek client wrapper around the OpenAI SDK + Langfuse trace."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 from openai.types.chat import ChatCompletion
 from tenacity import (
     AsyncRetrying,
@@ -19,7 +26,6 @@ from ..errors import swallow
 from ..logging import log
 from ..observability import get_langfuse
 
-
 _client: AsyncOpenAI | None = None
 
 
@@ -29,8 +35,22 @@ def get_client() -> AsyncOpenAI:
         _client = AsyncOpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
+            max_retries=0,
+            timeout=90.0,
         )
+        from .budget import guarded_create
+
+        create = _client.chat.completions.create
+
+        async def guarded(**kwargs):
+            return await guarded_create(create, **kwargs)
+
+        _client.chat.completions.create = guarded
     return _client
+
+
+class ToolOutputError(RuntimeError):
+    """Provider output is malformed; programming errors are never retried."""
 
 
 @dataclass(slots=True)
@@ -72,7 +92,15 @@ async def call_tool(
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=15),
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception_type(
+            (
+                APIConnectionError,
+                APITimeoutError,
+                RateLimitError,
+                InternalServerError,
+                ToolOutputError,
+            )
+        ),
         reraise=True,
     ):
         with attempt:
@@ -111,7 +139,7 @@ async def call_tool(
                 if generation:
                     with swallow("langfuse.gen_end_failed"):  # Layer A
                         generation.end(level="ERROR", status_message="no tool call")
-                raise RuntimeError("LLM returned no tool call")
+                raise ToolOutputError("LLM returned no tool call")
             tc = tool_calls[0]
             raw_args = tc.function.arguments
             try:
@@ -119,6 +147,7 @@ async def call_tool(
             except json.JSONDecodeError:
                 try:
                     from json_repair import repair_json
+
                     args = json.loads(repair_json(raw_args))
                     log.info("llm.json_repaired")
                 except Exception as exc:  # noqa: BLE001  # ponytail: repair_json failure type is unpredictable, broad catch intentional
@@ -130,7 +159,7 @@ async def call_tool(
                                 status_message=f"JSONDecodeError: {exc}",
                                 output=raw_args,
                             )
-                    raise RuntimeError(f"Invalid JSON in tool args: {exc}") from exc
+                    raise ToolOutputError(f"Invalid JSON in tool args: {exc}") from exc
 
             usage = resp.usage.model_dump() if resp.usage else None
             if generation:

@@ -1,4 +1,5 @@
 """Pydantic schemas for Extractor output (mirrors PROMPT_LIBRARY.md §1.1)."""
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -57,6 +58,19 @@ class RoundItem(BaseModel):
     questions: list[QuestionItem] = Field(default_factory=list)
 
 
+class InterviewQuestionRef(BaseModel):
+    round_index: int = Field(ge=0)
+    question_index: int = Field(ge=0)
+
+
+class InterviewItem(BaseModel):
+    company: str | None = None
+    position: str | None = None
+    profile_index: int | None = Field(default=None, ge=0)
+    evidence: str = Field(min_length=1)
+    questions: list[InterviewQuestionRef] = Field(default_factory=list)
+
+
 class ExtractedPost(BaseModel):
     """Top-level Extractor output. Matches function call schema."""
 
@@ -66,6 +80,7 @@ class ExtractedPost(BaseModel):
     level: Level = Level.UNKNOWN
     interview_date: str | None = None  # YYYY-MM
     rounds: list[RoundItem] = Field(default_factory=list)
+    interviews: list[InterviewItem] = Field(default_factory=list)
 
     @field_validator("interview_date")
     @classmethod
@@ -177,3 +192,13 @@ EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["properties"]["position_profil
     "items": profile_tool_schema(),
 }
 EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["required"].append("position_profiles")
+
+EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["properties"]["interviews"] = {
+    "type": "array",
+    "description": "明确的单次面试经历：公司与岗位配对以及该经历所属题目。evidence须逐字引用含公司/岗位的作者原文；无法确定时留空，禁止公司×岗位全组合。questions使用rounds数组下标round_index与轮内questions数组下标question_index（从0开始）。",
+    "items": InterviewItem.model_json_schema(),
+}
+# Inline nested definitions: provider schemas must not contain unresolved local refs.
+_item = EXTRACT_FUNCTION_SCHEMA["function"]["parameters"]["properties"]["interviews"]["items"]
+_item["properties"]["questions"]["items"] = InterviewQuestionRef.model_json_schema()
+_item.pop("$defs", None)

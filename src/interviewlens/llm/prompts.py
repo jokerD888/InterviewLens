@@ -1,5 +1,8 @@
 """All LLM prompts. Mirrors docs/PROMPT_LIBRARY.md, single source of truth in code."""
+
 from __future__ import annotations
+
+import html
 
 from ..config import settings
 from ..position_taxonomy import TAXONOMY_VERSION
@@ -28,13 +31,14 @@ EXTRACTOR_SYSTEM = """你是面经信息抽取助手。任务：从用户给的�
    推断 source=inferred、needs_review=true；原文明示 source=declared，只有证据充分时 needs_review=false。
    原始岗位 raw_title 保留原文；normalized_title可规范化但不能增加原文没有的职责。
 9. 同一岗位名称和分类需要证据，不能仅凭通用八股题确定岗位；关联不明的多岗位不强行合并。
+10. interviews记录公司—岗位—题目的明确配对。按作者明确描述分成单次面试经历，用数组下标引用rounds中的题目，附逐字证据。无法判断所属公司的题目不关联；禁止将所有公司与岗位全组合。
 
 输出：调用 extract_interview_post 函数，参数严格符合 schema。"""
 
 
 def get_extractor_prompt_version() -> int:
     # Shape and cleaning changes invalidate old extraction caches even with an old .env value.
-    return settings.extract_prompt_version + TAXONOMY_VERSION
+    return settings.extract_prompt_version * 100_000 + TAXONOMY_VERSION * 100 + 2
 
 
 def build_extractor_messages(cleaned_text: str) -> list[dict]:
@@ -74,10 +78,13 @@ def build_normalizer_messages(
 
     candidates: list of {id, canonical, similarity} sorted by similarity desc.
     """
-    cand_lines = "\n".join(
-        f"- id={c['id']} canonical={c['canonical']} sim={c['similarity']:.3f}"
-        for c in candidates
-    ) or "(无候选)"
+    cand_lines = (
+        "\n".join(
+            f"- id={c['id']} canonical={c['canonical']} sim={c['similarity']:.3f}"
+            for c in candidates
+        )
+        or "(无候选)"
+    )
     user = (
         f"实体类型：{entity_type}\n"
         f"待判断别名：「{alias}」\n\n"
@@ -150,13 +157,14 @@ def render_aggregator_md(data: dict) -> str:
     LLM only fills data; formatting is 100% deterministic.
     """
     parts: list[str] = []
+    safe = lambda value: html.escape(str(value), quote=False)
 
     # ── 高频考点 Top 10 ──
     topics = data.get("high_frequency_topics") or []
     if topics:
         parts.append("## 高频考点 Top 10\n")
         for t in topics:
-            name = t.get("topic", "")
+            name = safe(t.get("topic", ""))
             q_cnt = t.get("question_count") or t.get("frequency", 1)
             p_cnt = t.get("post_count")
             if p_cnt and p_cnt > 0:
@@ -165,7 +173,7 @@ def render_aggregator_md(data: dict) -> str:
                 count_str = f"<sub>×{q_cnt}</sub>"
             parts.append(f"### {name} {count_str}\n")
             for q in t.get("sample_questions") or []:
-                parts.append(f"> {q}\n")
+                parts.append(f"> {safe(q)}\n")
             parts.append("")
 
     # ── 重点考察方向 ──
@@ -173,7 +181,7 @@ def render_aggregator_md(data: dict) -> str:
     if areas:
         parts.append("## 重点考察方向\n")
         for a in areas:
-            parts.append(f"- {a}")
+            parts.append(f"- {safe(a)}")
         parts.append("")
 
     # ── 易忽略的偏门题 ──
@@ -185,10 +193,10 @@ def render_aggregator_md(data: dict) -> str:
         for e in edges:
             if not isinstance(e, dict):
                 continue
-            name = e.get("topic", "")
+            name = safe(e.get("topic", ""))
             parts.append(f"### {name}\n")
             for q in e.get("questions") or []:
-                parts.append(f"> {q}\n")
+                parts.append(f"> {safe(q)}\n")
             parts.append("")
 
     # ── 备考建议 ──
@@ -196,7 +204,7 @@ def render_aggregator_md(data: dict) -> str:
     if advice:
         parts.append("## 备考建议\n")
         for i, a in enumerate(advice, 1):
-            parts.append(f"{i}. {a}")
+            parts.append(f"{i}. {safe(a)}")
         parts.append("")
 
     return "\n".join(parts)

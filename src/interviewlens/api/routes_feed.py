@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..db.processing_reads import READY_POST_SQL
 from ..crawler.cleaner import strip_nowcoder_noise
 from ..position_taxonomy import TAXONOMY_VERSION, PositionCategory
 from ..scoring import freshness_case_sql
@@ -40,7 +41,7 @@ async def feed(
     Each post includes its associated questions (questions are fetched
     in a second query and merged in Python).
     """
-    clauses = ["po.extract_status = 'done'"]
+    clauses = ["po.extract_status = 'done'", READY_POST_SQL]
     params: dict[str, object] = {
         "limit": limit,
         "offset": offset,

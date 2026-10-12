@@ -5,6 +5,7 @@ gets full attention. Length adapts to difficulty via the prompt. Results are
 cached in Redis by question text + prompt version, then written to
 questions.answer_ai.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 import openai
 from sqlalchemy import text as sa_text
 
+from ..db.processing_reads import READY_POST_SQL
 from ..config import settings
 from ..db import session_scope
 from ..errors import swallow
@@ -20,10 +22,10 @@ from ..llm.cache import cache_get, cache_set, make_cache_key
 from ..llm.deepseek import get_client
 from ..llm.prompts import build_answerer_messages
 from ..logging import log
-from ..observability import get_langfuse, incr_tokens
+from ..observability import get_langfuse
 
 ANSWER_NAMESPACE = "answer"
-CONCURRENCY = 100
+CONCURRENCY = settings.llm_concurrency
 MAX_TOKENS = 1500
 
 
@@ -35,13 +37,11 @@ class AnswerOutcome:
     failed: int = 0
 
 
-async def generate_one(
-    *, content: str, category: str | None, trace=None
-) -> str | None:
+async def generate_one(*, content: str, category: str | None, trace=None) -> str | None:
     """Generate (or fetch cached) AI answer for one question. None on failure."""
     key = make_cache_key(
         namespace=ANSWER_NAMESPACE,
-        payload={"content": content},
+        payload={"content": content, "category": category, "model": settings.deepseek_model_chat},
         version=settings.answer_prompt_version,
     )
     cached = await cache_get(key)
@@ -93,18 +93,15 @@ async def generate_one(
         log.warning("answer.truncated", max_tokens=MAX_TOKENS)
         answer = ""
     usage = resp.usage.model_dump() if resp.usage else None
-    if usage:
-        await incr_tokens(
-            prompt=int(usage.get("prompt_tokens") or 0),
-            completion=int(usage.get("completion_tokens") or 0),
-        )
     if generation is not None:
         with swallow("answer.trace_record_failed"):  # Layer A
             if answer:
                 generation.end(output=answer, usage=usage)
             else:
                 generation.end(
-                    output=answer, usage=usage, level="ERROR",
+                    output=answer,
+                    usage=usage,
+                    level="ERROR",
                     status_message="Truncated answer" if truncated else "Empty answer",
                 )
     if own_client is not None:
@@ -126,28 +123,22 @@ async def _fetch_targets(
 ) -> list[dict]:
     """Select questions needing an AI answer."""
     clauses = [
-        "po.extract_status = 'done'",
+        "po.extract_status = 'done'", READY_POST_SQL,
         "COALESCE(po.content_score, 0) >= :min_q",
     ]
     params: dict[str, object] = {"min_q": min_quality, "ver": settings.answer_prompt_version}
     if not regenerate:
         clauses.append("(q.answer_ai IS NULL OR q.answer_ai_version < :ver)")
     joins = "JOIN posts po ON po.id = q.post_id"
-    if company:
-        joins += (
-            " JOIN post_company_position pcp_c ON pcp_c.post_id = po.id"
-            " JOIN companies c ON c.id = pcp_c.company_id"
-        )
-        clauses.append("c.canonical = :company")
-        params["company"] = company
-    if position:
-        joins += (
-            " JOIN post_company_position pcp_p ON pcp_p.post_id = po.id"
-            " JOIN positions p ON p.id = pcp_p.position_id"
-        )
-        clauses.append("p.canonical = :position")
-        params["position"] = position
+    if company or position:
+        from ..db.attribution import question_scope_sql
 
+        clauses.append(
+            question_scope_sql(
+                company=":company" if company else None, position=":position" if position else None
+            )
+        )
+        params.update({"company": company, "position": position})
     limit_sql = ""
     if limit is not None:
         limit_sql = "LIMIT :limit"
@@ -157,7 +148,7 @@ async def _fetch_targets(
     SELECT DISTINCT q.id, q.content, q.category
     FROM questions q
     {joins}
-    WHERE {' AND '.join(clauses)}
+    WHERE {" AND ".join(clauses)}
     ORDER BY q.id
     {limit_sql}
     """
@@ -169,9 +160,7 @@ async def _fetch_targets(
 async def _write_answer(qid: int, answer: str) -> None:
     async with session_scope() as session:
         await session.execute(
-            sa_text(
-                "UPDATE questions SET answer_ai = :a, answer_ai_version = :v WHERE id = :id"
-            ),
+            sa_text("UPDATE questions SET answer_ai = :a, answer_ai_version = :v WHERE id = :id"),
             {"a": answer, "v": settings.answer_prompt_version, "id": qid},
         )
 
@@ -209,7 +198,16 @@ async def run_answers(
                 outcome.generated += 1
             done += 1
             if done % 100 == 0 or done == total:
-                log.info("answer.progress", done=done, total=total, generated=outcome.generated, failed=outcome.failed)
+                log.info(
+                    "answer.progress",
+                    done=done,
+                    total=total,
+                    generated=outcome.generated,
+                    failed=outcome.failed,
+                )
 
     await asyncio.gather(*(_one(t) for t in targets))
+    from ..api.cache import invalidate_read_caches
+
+    await invalidate_read_caches()
     return outcome

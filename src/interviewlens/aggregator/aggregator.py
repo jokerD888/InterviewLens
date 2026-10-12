@@ -1,6 +1,7 @@
 """Aggregator: bucket questions by (company, position, period), dedup by
 embedding similarity, then ask DeepSeek to summarise into markdown.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,16 +23,16 @@ from tenacity import (
     wait_exponential,
 )
 
+from ..db.processing_reads import READY_POST_SQL
 from ..config import settings
 from ..db import (
     Company,
     Position,
-    Post,
-    Question,
     Summary,
     session_scope,
 )
-from ..embedding import EMBEDDING_VERSION, cosine_matrix, embed_texts
+from ..db.attribution import question_scope_sql
+from ..embedding import EMBEDDING_VERSION
 from ..errors import swallow
 from ..llm.aggregator_schema import AggregatorResult
 from ..llm.deepseek import get_client
@@ -40,7 +41,6 @@ from ..llm.prompts import (
     render_aggregator_md,
 )
 from ..logging import log
-from ..observability import incr_tokens
 
 DEFAULT_TOP_N: int | None = None  # full-bucket statistics by default
 DEFAULT_PAGE_SIZE = 512
@@ -52,7 +52,7 @@ MIN_CONTENT_SCORE = 30
 MIN_QUALITY_SCORE = MIN_CONTENT_SCORE
 MAX_OUTPUT_ATTEMPTS = 2  # initial generation + one corrective prompt
 MAX_TRANSPORT_ATTEMPTS = 3
-AGGREGATOR_FINGERPRINT_VERSION = 2
+AGGREGATOR_FINGERPRINT_VERSION = 3
 
 
 class AggregatorOutputError(RuntimeError):
@@ -80,9 +80,7 @@ def _period_for(dt: datetime | None) -> str | None:
     return f"{dt.year}Q{quarter}"
 
 
-async def _resolve_canonical_ids(
-    *, company: str, position: str
-) -> tuple[int | None, int | None]:
+async def _resolve_canonical_ids(*, company: str, position: str) -> tuple[int | None, int | None]:
     async with session_scope() as session:
         c_id = (
             await session.execute(select(Company.id).where(Company.canonical == company))
@@ -128,13 +126,14 @@ async def _fetch_candidate_questions(
             """
         sql = f"""
         WITH bucket_posts AS (
-            SELECT po.id, po.posted_at,
+            SELECT DISTINCT po.id, po.posted_at,
                    COALESCE(po.content_score, 0) AS content_score
             FROM posts po
             JOIN post_company_position pcp ON pcp.post_id = po.id
             WHERE pcp.company_id = :c
               AND pcp.position_id = :p
               AND po.extract_status = 'done'
+              AND {READY_POST_SQL}
               AND COALESCE(po.content_score, 0) >= :min_q
               AND (
                   CAST(:period AS TEXT) IS NULL
@@ -147,6 +146,7 @@ async def _fetch_candidate_questions(
         JOIN bucket_posts bp ON bp.id = q.post_id
         JOIN posts p ON p.id = bp.id
         WHERE q.embedding IS NOT NULL
+          AND {question_scope_sql(company=":c", position=":p", canonical=False)}
           AND q.embedding_model = :embedding_model
           AND q.embedding_version = :embedding_version
         {keyset_clause}
@@ -165,24 +165,25 @@ async def _fetch_candidate_questions(
         if after_score is not None and after_id is not None:
             params.update({"after_score": after_score, "after_id": after_id})
         async with session_scope() as session:
-            rows = (await session.execute(sa_text(sql), params)).all()
+            rows = (await session.execute(sa_text(sql), params)).mappings().all()
         if not rows:
             break
         results.extend(
             {
-                "id": r[0],
-                "content": r[1],
-                "category": r[2],
-                "answer_brief": r[3],
-                "content_score": r[4],
+                "id": r["id"],
+                "post_id": r["post_id"],
+                "content": r["content"],
+                "category": r["category"],
+                "answer_brief": r["answer_brief"],
+                "content_score": r["content_score"],
                 # Compatibility for prompt/tests written before the split.
-                "quality_score": r[4],
-                "source_url": r[5],
+                "quality_score": r["content_score"],
+                "source_url": r["source_url"],
             }
             for r in rows
         )
-        after_score = int(rows[-1][4] or 0)
-        after_id = int(rows[-1][0])
+        after_score = int(rows[-1]["content_score"] or 0)
+        after_id = int(rows[-1]["id"])
         if len(rows) < limit:
             break
     return results
@@ -221,81 +222,63 @@ def _cluster_questions(
     threshold: float,
     block_size: int = 512,
 ) -> list[dict]:
-    """Cluster a complete bucket with blockwise NumPy graph construction.
+    """Deterministic representative-anchored clustering.
 
-    Similarity edges are added for every pair at or above ``threshold`` and
-    Union-Find computes connected components.  This is order-independent and
-    gives each component's true frequency within the supplied population.
-    ``block_size`` bounds the temporary similarity matrix, while the overall
-    exact comparison remains O(n²d).
+    Every member must meet the threshold against its fixed representative.
+    A~B and B~C cannot pull C into A's cluster when A~C is below threshold.
+    Score/id ordering makes the outcome independent of input order.
     """
     if block_size <= 0:
         raise ValueError("block_size must be positive")
+    if not -1 <= threshold <= 1:
+        raise ValueError("threshold must be between -1 and 1")
     n = len(questions)
-    if n == 0:
+    if not n:
         return []
-
-    parent = list(range(n))
-    sizes = [1] * n
-
-    def find(value: int) -> int:
-        while parent[value] != value:
-            parent[value] = parent[parent[value]]
-            value = parent[value]
-        return value
-
-    def union(left: int, right: int) -> None:
-        root_left = find(left)
-        root_right = find(right)
-        if root_left == root_right:
-            return
-        if sizes[root_left] < sizes[root_right]:
-            root_left, root_right = root_right, root_left
-        parent[root_right] = root_left
-        sizes[root_left] += sizes[root_right]
-
-    valid_indices: list[int] = []
-    valid_vectors: list[np.ndarray] = []
-    for index, question in enumerate(questions):
-        vector = embeddings.get(question["id"])
-        if vector is None or vector.size == 0:
+    ordered = sorted(
+        range(n),
+        key=lambda i: (
+            -(questions[i].get("content_score", questions[i].get("quality_score")) or 0),
+            questions[i]["id"],
+        ),
+    )
+    vectors = {}
+    for i in ordered:
+        v = embeddings.get(questions[i]["id"])
+        if v is None or v.size == 0:
             continue
-        if vector.ndim != 1:
-            raise ValueError(f"embedding for question {question['id']} is not 1-D")
-        if not np.isfinite(vector).all() or float(np.linalg.norm(vector)) <= 1e-12:
+        if v.ndim != 1:
+            raise ValueError(f"embedding for question {questions[i]['id']} is not 1-D")
+        norm = float(np.linalg.norm(v))
+        if np.isfinite(v).all() and norm > 1e-12:
+            vectors[i] = np.asarray(v, dtype=np.float32) / norm
+    unassigned = set(ordered)
+    components = {}
+    for representative in ordered:
+        if representative not in unassigned:
             continue
-        valid_indices.append(index)
-        valid_vectors.append(np.asarray(vector, dtype=np.float32))
-
-    if valid_vectors:
-        matrix = np.stack(valid_vectors)
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        matrix = matrix / norms
-        for start in range(0, len(valid_indices), block_size):
-            stop = min(start + block_size, len(valid_indices))
-            left = matrix[start:stop]
-            for other_start in range(start, len(valid_indices), block_size):
-                other_stop = min(other_start + block_size, len(valid_indices))
-                right = matrix[other_start:other_stop]
-                similarities = cosine_matrix(left, right)
-                pairs = np.argwhere(similarities >= threshold)
-                for left_offset, right_offset in pairs:
-                    left_pos = start + int(left_offset)
-                    right_pos = other_start + int(right_offset)
-                    if left_pos >= right_pos:
-                        continue
-                    union(valid_indices[left_pos], valid_indices[right_pos])
-
-    components: dict[int, list[int]] = {}
-    for index in range(n):
-        components.setdefault(find(index), []).append(index)
+        members = [representative]
+        unassigned.remove(representative)
+        if representative in vectors:
+            candidates = [i for i in ordered if i in unassigned and i in vectors]
+            for start in range(0, len(candidates), block_size):
+                chunk = candidates[start : start + block_size]
+                sims = np.stack([vectors[i] for i in chunk]) @ vectors[representative]
+                for i, sim in zip(chunk, sims, strict=True):
+                    if float(sim) >= threshold:
+                        members.append(i)
+                        unassigned.remove(i)
+        components[representative] = members
 
     clusters: list[dict] = []
     for members in components.values():
         representative = min(
             members,
             key=lambda index: (
-                -(questions[index].get("content_score", questions[index].get("quality_score")) or 0),
+                -(
+                    questions[index].get("content_score", questions[index].get("quality_score"))
+                    or 0
+                ),
                 questions[index]["id"],
             ),
         )
@@ -363,6 +346,9 @@ def _build_input_fingerprint(
                 "id": q.get("id"),
                 "content": q.get("content"),
                 "category": q.get("category"),
+                "post_id": q.get("post_id"),
+                "answer_brief": q.get("answer_brief"),
+                "source_url": q.get("source_url"),
                 "content_score": q.get("content_score"),
             }
             for q in questions
@@ -413,9 +399,7 @@ def _parse_aggregator_output(
             f"Aggregator schema validation failed: {str(exc)[:1200]}"
         ) from exc
 
-    known_questions = {
-        _normalise_question_text(str(q.get("content", ""))) for q in questions
-    }
+    known_questions = {_normalise_question_text(str(q.get("content", ""))) for q in questions}
     cluster_by_content: dict[str, dict] = {}
     for cluster in questions:
         norm_rep = _normalise_question_text(str(cluster.get("content", "")))
@@ -434,11 +418,7 @@ def _parse_aggregator_output(
             for topic in result.high_frequency_topics
             for question in topic.sample_questions
         ),
-        *(
-            question
-            for edge in result.edge_cases
-            for question in edge.questions
-        ),
+        *(question for edge in result.edge_cases for question in edge.questions),
     ]
     unknown_questions = [
         question
@@ -492,9 +472,7 @@ def _parse_aggregator_output(
         topic.question_count = calc_q_count
         topic.post_count = calc_post_count
 
-    result.high_frequency_topics.sort(
-        key=lambda t: (-t.frequency, -(t.post_count or 1), t.topic)
-    )
+    result.high_frequency_topics.sort(key=lambda t: (-t.frequency, -(t.post_count or 1), t.topic))
 
     return result
 
@@ -571,11 +549,6 @@ async def _summarise(
         )
         current_usage = resp.usage.model_dump() if resp.usage else None
         usage_total = _merge_usage(usage_total, current_usage)
-        if current_usage:
-            await incr_tokens(
-                prompt=int(current_usage.get("prompt_tokens") or 0),
-                completion=int(current_usage.get("completion_tokens") or 0),
-            )
         raw_content = resp.choices[0].message.content or ""
 
         try:
@@ -769,6 +742,9 @@ async def aggregate_one(
                 existing.sample_count = len(raw)
                 existing.input_fingerprint = input_fingerprint
                 existing.updated_at = now
+        from ..api.cache import invalidate_read_caches
+
+        await invalidate_read_caches()
 
     return AggregateOutcome(
         company_id=c_id,

@@ -258,7 +258,12 @@ export const paths = {
 };
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${API_PREFIX}${path}`, { cache: "no-store", ...init });
+  const headers = new Headers(init?.headers);
+  if (typeof window !== "undefined" && (path.startsWith("/admin/") || path.startsWith("/bridge/"))) {
+    const token = sessionStorage.getItem("il-admin-token");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  const resp = await fetch(`${API_PREFIX}${path}`, { cache: "no-store", ...init, headers });
   if (!resp.ok) throw new Error(`HTTP ${resp.status} on ${path}`);
   return resp.json() as Promise<T>;
 }

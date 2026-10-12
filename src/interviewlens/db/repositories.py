@@ -1,9 +1,10 @@
 """Async repositories — thin functions over SQLModel ORM."""
+
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import case, delete, func, update
+from sqlalchemy import case, delete, func, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -64,11 +65,7 @@ async def upsert_raw_post(
 
 
 async def set_cleaned_text(session: AsyncSession, post_id: int, text: str) -> None:
-    await session.execute(
-        update(Post)
-        .where(Post.id == post_id)
-        .values(cleaned_text=text)
-    )
+    await session.execute(update(Post).where(Post.id == post_id).values(cleaned_text=text))
 
 
 async def mark_extract_status(
@@ -86,9 +83,7 @@ async def mark_extract_status(
 
 
 async def set_quality_score(session: AsyncSession, post_id: int, score: int) -> None:
-    await session.execute(
-        update(Post).where(Post.id == post_id).values(quality_score=score)
-    )
+    await session.execute(update(Post).where(Post.id == post_id).values(quality_score=score))
 
 
 async def set_interview_date(
@@ -106,9 +101,7 @@ async def set_interview_date(
             # this repository boundary defensive for direct callers.
             interview_date = None
     await session.execute(
-        update(Post)
-        .where(Post.id == post_id)
-        .values(interview_date=interview_date)
+        update(Post).where(Post.id == post_id).values(interview_date=interview_date)
     )
 
 
@@ -134,6 +127,7 @@ async def replace_questions(
     session: AsyncSession,
     post_id: int,
     rounds: list[dict],
+    question_refs: dict | None = None,
 ) -> int:
     """Sync questions for a post, preserving existing embeddings and AI answers when content matches.
 
@@ -143,9 +137,8 @@ async def replace_questions(
     2. Adds new questions that didn't exist before.
     3. Removes orphaned questions that no longer appear in the extracted rounds.
     """
-    existing_result = await session.execute(
-        select(Question).where(Question.post_id == post_id)
-    )
+    await session.execute(text("SELECT pg_advisory_xact_lock(73419, :id)"), {"id": post_id})
+    existing_result = await session.execute(select(Question).where(Question.post_id == post_id))
     existing_rows = list(existing_result.scalars().all())
 
     # Map content -> queue of existing questions (handling potential duplicate questions within same post)
@@ -157,10 +150,10 @@ async def replace_questions(
     retained_ids: set[int] = set()
     total_active = 0
 
-    for r in rounds:
+    for round_index, r in enumerate(rounds):
         round_no = int(r.get("round_no") or 1)
         round_type = r.get("round_type")
-        for q in r.get("questions") or []:
+        for question_index, q in enumerate(r.get("questions") or []):
             content = (q.get("content") or "").strip()
             if not content:
                 continue
@@ -177,6 +170,8 @@ async def replace_questions(
                 matched_q.answer_brief = q.get("answer_brief")
                 if matched_q.id is not None:
                     retained_ids.add(matched_q.id)
+                if question_refs is not None:
+                    question_refs[(round_index, question_index)] = matched_q
                 total_active += 1
             else:
                 # Brand new question
@@ -189,14 +184,16 @@ async def replace_questions(
                     answer_brief=q.get("answer_brief"),
                 )
                 session.add(new_q)
+                if question_refs is not None:
+                    question_refs[(round_index, question_index)] = new_q
                 total_active += 1
 
     # Clean up orphaned questions that are no longer present
-    orphaned_ids = [eq.id for eq in existing_rows if eq.id is not None and eq.id not in retained_ids]
+    orphaned_ids = [
+        eq.id for eq in existing_rows if eq.id is not None and eq.id not in retained_ids
+    ]
     if orphaned_ids:
-        await session.execute(
-            delete(Question).where(Question.id.in_(orphaned_ids))
-        )
+        await session.execute(delete(Question).where(Question.id.in_(orphaned_ids)))
 
     await session.flush()
     return total_active
@@ -208,25 +205,25 @@ async def replace_post_links(
     *,
     company_ids: list[int],
     position_ids: list[int],
+    explicit_pairs: list[tuple[int, int]] | None = None,
 ) -> int:
     """Replace post_company_position rows for ``post_id``.
 
-    Cartesian product of (company × position) — required by the schema. Returns
-    the number of rows inserted (deduplicated).
+    Only explicit pairs, or a single unambiguous legacy pair, are written.
+    Ambiguous historical links remain as evidence; scoped queries exclude them.
     """
-    await session.execute(
-        delete(PostCompanyPosition).where(PostCompanyPosition.post_id == post_id)
-    )
+    if explicit_pairs is None:
+        # Independent multi-valued labels contain no evidence for pairings.
+        if len(set(company_ids)) != 1 or len(set(position_ids)) != 1:
+            return 0
+        explicit_pairs = [(company_ids[0], position_ids[0])]
+    await session.execute(delete(PostCompanyPosition).where(PostCompanyPosition.post_id == post_id))
     seen: set[tuple[int, int]] = set()
     pairs: list[dict] = []
-    for cid in company_ids or []:
-        for pid in position_ids or []:
-            if (cid, pid) in seen:
-                continue
+    for cid, pid in explicit_pairs:
+        if (cid, pid) not in seen:
             seen.add((cid, pid))
-            pairs.append(
-                {"post_id": post_id, "company_id": cid, "position_id": pid}
-            )
+            pairs.append({"post_id": post_id, "company_id": cid, "position_id": pid})
     if not pairs:
         return 0
     stmt = pg_insert(PostCompanyPosition).values(pairs).on_conflict_do_nothing()

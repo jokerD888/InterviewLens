@@ -1,4 +1,5 @@
 """Answerer unit tests — cache + per-question generation, no real LLM/DB."""
+
 from __future__ import annotations
 
 import pytest
@@ -66,7 +67,6 @@ async def test_generate_one_calls_llm_on_miss(monkeypatch) -> None:
     monkeypatch.setattr(ans, "cache_get", fake_get)
     monkeypatch.setattr(ans, "cache_set", fake_set)
     monkeypatch.setattr(ans, "get_client", lambda: _Client())
-    monkeypatch.setattr(ans, "incr_tokens", fake_incr)
 
     out = await ans.generate_one(content="什么是 GIL？", category="Python")
     assert out == "生成的答案"
@@ -79,7 +79,9 @@ async def test_generate_one_none_on_api_failure(monkeypatch) -> None:
         return None
 
     def fake_client():
-        raise RuntimeError("API down")
+        import httpx, openai
+
+        raise openai.APIConnectionError(request=httpx.Request("POST", "https://provider.invalid"))
 
     monkeypatch.setattr(ans, "cache_get", fake_get)
     monkeypatch.setattr(ans, "get_client", fake_client)
