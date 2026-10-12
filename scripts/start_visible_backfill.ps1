@@ -5,7 +5,8 @@
     [ValidateSet('tab','job')][string]$Listing = 'tab',
     [int]$JobId = -1,
     [ValidateRange(1,3)][int]$JobLevel = 1,
-    [string]$Since
+    [string]$Since,
+    [switch]$Partitioned
 )
 $ErrorActionPreference = 'Stop'
 $taskCodeRoot = Split-Path -Parent $PSScriptRoot
@@ -18,6 +19,7 @@ $Host.UI.RawUI.WindowTitle = 'InterviewLens - visible backfill'
 $taskArguments = @((Join-Path $taskCodeRoot 'scripts\visible_backfill.py'), '--project-root', $ProjectRoot)
 $taskArguments += @('--listing', $Listing, '--job-id', "$JobId", '--job-level', "$JobLevel")
 if ($Since) { $taskArguments += @('--since', $Since) }
+if ($Partitioned) { $taskArguments += '--partitioned' }
 if ($Once) { $taskArguments += '--once' }
 & $runtimePython @taskArguments
 Write-Host "Crawler exited with code $LASTEXITCODE. The window remains open."

@@ -59,7 +59,7 @@ class BackfillStore:
                 finally:
                     self.connection = None
 
-    async def begin_batch(self, since: datetime | None, cooldown: int, resume: bool):
+    async def begin_batch(self, since: datetime | None, cooldown: int, resume: bool, *, drain_pending: bool = False):
         async with self.connection.begin():
             await self.connection.execute(
                 text("""
@@ -92,13 +92,17 @@ class BackfillStore:
             if row["cooling"]:
                 return "cooldown", dict(row)
             if row["paused_reason"] and not resume:
-                return "paused", dict(row)
+                # A pagination boundary prohibits more LIST requests, but leaves
+                # already discovered detail URLs usable. Never drain auth/rate pauses.
+                if not (drain_pending and row["paused_reason"] == "pagination_repeated"):
+                    return "paused", dict(row)
             await self.connection.execute(
                 text("""
-                UPDATE crawl_progress SET last_batch_at=NOW(),paused_reason=NULL
+                UPDATE crawl_progress SET last_batch_at=NOW(),
+                    paused_reason=CASE WHEN :drain THEN paused_reason ELSE NULL END
                 WHERE source=:source
             """),
-                {"source": self.source},
+                {"source": self.source, "drain": drain_pending},
             )
             return "ready", dict(row)
 

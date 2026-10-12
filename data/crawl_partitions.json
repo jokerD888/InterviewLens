@@ -1,0 +1,13 @@
+[
+  {"name": "前端开发", "job_id": 11201, "job_level": 2},
+  {"name": "数据", "job_id": 11204, "job_level": 2},
+  {"name": "客户端开发", "job_id": 11202, "job_level": 2},
+  {"name": "测试", "job_id": 11203, "job_level": 2},
+  {"name": "运维", "job_id": 11205, "job_level": 2},
+  {"name": "研发工程师", "job_id": 142700, "job_level": 2},
+  {"name": "后端开发", "job_id": 11200, "job_level": 2},
+  {"name": "人工智能/算法", "job_id": 11240, "job_level": 2},
+  {"name": "硬件工程师", "job_id": 11206, "job_level": 2},
+  {"name": "电子/半导体", "job_id": 11207, "job_level": 2},
+  {"name": "通信", "job_id": 143069, "job_level": 2}
+]

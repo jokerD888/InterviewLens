@@ -49,6 +49,7 @@ async def backfill_batch(
     listing: str = "tab",
     job_id: int = -1,
     job_level: int = 1,
+    pending_only: bool = False,
     store=None,
     fetcher_factory=None,
     progress: Callable[[str, dict], None] | None = None,
@@ -69,7 +70,10 @@ async def backfill_batch(
     async with store.locked() as acquired:
         if not acquired:
             return {**result, "status": "locked"}
-        status, _ = await store.begin_batch(since, limits.cooldown, resume_paused)
+        if pending_only:
+            status, _ = await store.begin_batch(since, limits.cooldown, False, drain_pending=True)
+        else:
+            status, _ = await store.begin_batch(since, limits.cooldown, resume_paused)
         if status != "ready":
             return {**result, "status": status, **await store.snapshot()}
         if retry_failed:
@@ -78,12 +82,14 @@ async def backfill_batch(
         state = await store.snapshot()
         if limits.daily is not None and state["today_attempts"] >= limits.daily:
             return {**result, "status": "daily_limit", **state}
+        if pending_only and not state["pending"]:
+            return {**result, "status": "drained", **state}
         current_url = None
         emit("batch_start", pending=state["pending"], today_attempts=state["today_attempts"])
         try:
             async with fetcher_factory() as fetcher:
                 pending = await store.pending(limits.batch)
-                if not pending:
+                if not pending and not pending_only:
                     cursor = await store.start_scan()
                     # Revisit two pages to tolerate modest insertions/reordering. Always
                     # advance at least one page (pages>=3). Existing URLs never end a scan.
@@ -133,4 +139,6 @@ async def backfill_batch(
             emit("stopped", reason=exc.reason)
         # Cancellation and unexpected errors propagate: already committed queue/cursor
         # and attempt reservations survive; lock and browser are released by contexts.
+        if pending_only and result["status"] in ("complete", "batch_limit"):
+            result["status"] = "drained"
         return {**result, **await store.snapshot()}

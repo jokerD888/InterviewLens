@@ -408,3 +408,40 @@ async def test_unlimited_daily_budget_keeps_counting_after_100(engine):
         assert (await store.snapshot())["today_attempts"] == 102
         assert (await store.pending(1))[0]["attempts"] == 2
         assert not await store.reserve_attempt(url, 100)
+
+
+async def test_pagination_pause_allows_detail_drain_without_clearing_pause_or_scanning(engine, monkeypatch):
+    store = BackfillStore(engine)
+    async with store.locked():
+        await store.begin_batch(SINCE, 0, False)
+        await store.enqueue_page([record(1)], 20, SINCE)
+        await store.fail(None, "pagination_repeated", pause=True)
+    listing = AsyncMock()
+    monkeypatch.setattr(backfill, "fetch_tab_page", listing)
+    monkeypatch.setattr(backfill, "fetch_detail", AsyncMock(return_value=("面试正文", "面试")))
+    report = await backfill.backfill_batch(
+        since=SINCE, store=store, pending_only=True, fetcher_factory=browser,
+        limits=backfill.BackfillLimits(cooldown=0, continuous=True, daily=None),
+    )
+    assert report["status"] == "drained" and report["saved"] == 1
+    assert report["pending"] == 0 and report["next_page"] == 21
+    assert report["paused_reason"] == "pagination_repeated"
+    listing.assert_not_awaited()
+    # The next normal batch must remain blocked at the original boundary.
+    report = await backfill.backfill_batch(
+        store=store, fetcher_factory=browser,
+        limits=backfill.BackfillLimits(cooldown=0, continuous=True, daily=None),
+    )
+    assert report["status"] == "paused"
+
+
+async def test_detail_drain_cannot_bypass_login_or_rate_pause(engine):
+    store = BackfillStore(engine)
+    async with store.locked():
+        await store.begin_batch(SINCE, 0, False)
+        await store.enqueue_page([record(1)], 1, SINCE)
+        for reason in ("http_429", "login_or_challenge"):
+            await store.fail(None, reason, pause=True)
+            status, _ = await store.begin_batch(SINCE, 0, False, drain_pending=True)
+            assert status == "paused"
+            assert (await store.snapshot())["paused_reason"] == reason
