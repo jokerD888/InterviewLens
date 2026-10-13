@@ -64,7 +64,7 @@ async def main(base_url):
                 "invalid-credential-for-browser-acceptance"
             )
             await page.get_by_role("button", name="登录", exact=True).click()
-            await expect(page.get_by_role("alert")).to_contain_text("凭据无效")
+            await expect(page.locator('section p[role="alert"]')).to_contain_text("凭据无效")
             await expect(dashboard_heading).to_have_count(0)
             assert all(url.endswith("/api/admin/health") for url in requests)
 
@@ -94,7 +94,7 @@ async def main(base_url):
             await page.route("**/api/admin/health", expired)
             await page.evaluate("window.dispatchEvent(new Event('focus'))")
             await expect(login_heading).to_be_visible(timeout=12_000)
-            await expect(page.get_by_role("alert")).to_contain_text("登录已失效")
+            await expect(page.locator('section p[role="alert"]')).to_contain_text("登录已失效")
             assert await page.evaluate("sessionStorage.getItem('il-admin-token') === null")
             await expect(page.get_by_text("手动入库", exact=True)).to_have_count(0)
             await page.unroute("**/api/admin/health", expired)
