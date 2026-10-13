@@ -11,6 +11,7 @@ Why bge-m3:
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Iterable
 
 import httpx
@@ -27,6 +28,7 @@ _tokenizer = None
 _tok_lock = asyncio.Lock()
 _inferpilot_client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
+_encode_lock = threading.Lock()
 
 
 def _resolve_device() -> str:
@@ -73,6 +75,7 @@ async def get_model():
             return SentenceTransformer(
                 settings.embedding_model,
                 device=device,
+                trust_remote_code=False,
             )
 
         _model = await asyncio.to_thread(_do_load)
@@ -92,7 +95,7 @@ async def get_tokenizer():
         from transformers import AutoTokenizer  # noqa: WPS433
 
         def _do_load():
-            return AutoTokenizer.from_pretrained(settings.embedding_model)
+            return AutoTokenizer.from_pretrained(settings.embedding_model, trust_remote_code=False)
 
         _tokenizer = await asyncio.to_thread(_do_load)
         log.info("tokenizer.loaded", model=settings.embedding_model)
@@ -120,12 +123,15 @@ async def _embed_batch_pytorch(items: list[str]) -> np.ndarray:
     model = await get_model()
 
     def _do_encode():
-        return model.encode(
-            items,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
+        # The lock lives in the actual thread, so cancellation of the awaiter
+        # cannot let a second encode run while the first thread is still busy.
+        with _encode_lock:
+            return model.encode(
+                items,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
 
     arr = await asyncio.to_thread(_do_encode)
     return np.asarray(arr, dtype=np.float32)

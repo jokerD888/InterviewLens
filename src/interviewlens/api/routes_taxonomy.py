@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -29,8 +30,8 @@ def _key(name: str, params: dict) -> str:
 
 @router.get("/companies", response_model=list[CompanyOut])
 async def list_companies(
-    limit: int = 100,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
     with_counts: bool = True,
     session: AsyncSession = Depends(get_session),
 ) -> list[CompanyOut]:
@@ -71,7 +72,7 @@ async def list_companies(
 
 @router.get("/companies/{company_id}/positions", response_model=list[CompanyPositionStat])
 async def list_company_positions(
-    company_id: int,
+    company_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
     session: AsyncSession = Depends(get_session),
 ) -> list[CompanyPositionStat]:
     if settings.search_cache_enabled:
@@ -104,8 +105,8 @@ async def list_company_positions(
 
 @router.get("/positions", response_model=list[PositionOut])
 async def list_positions(
-    limit: int = 100,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
     with_counts: bool = True,
     session: AsyncSession = Depends(get_session),
 ) -> list[PositionOut]:

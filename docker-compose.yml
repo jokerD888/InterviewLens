@@ -29,7 +29,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-il_pass}
       POSTGRES_DB: ${POSTGRES_DB:-interviewlens}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - il_pg_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
@@ -48,7 +48,7 @@ services:
     container_name: il-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - il_redis_data:/data
     command: ["redis-server", "--appendonly", "yes"]
@@ -82,7 +82,7 @@ services:
       langfuse-db:
         condition: service_healthy
     ports:
-      - "${LANGFUSE_PORT:-3001}:3000"
+      - "127.0.0.1:${LANGFUSE_PORT:-3001}:3000"
     environment:
       DATABASE_URL: postgresql://langfuse:langfuse_pass@langfuse-db:5432/langfuse
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-please-use-openssl-rand-hex-32}
@@ -106,7 +106,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     shm_size: "2gb"
     env_file:
       - .env
@@ -184,7 +184,9 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "3013:3000"
+      - "127.0.0.1:3013:3000"
+    environment:
+      API_BASE: http://api:8000
 
 volumes:
   il_pg_data:

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
-
-from ..position_taxonomy import PositionProfile
+from pydantic import BaseModel, Field, model_validator
+from .public_data import protect_question
 
 
 class CompanyOut(BaseModel):
@@ -49,6 +48,10 @@ class QuestionOut(BaseModel):
     quality_score: int | None = None
     source_url: str | None = None
     similarity: float | None = None
+
+    @model_validator(mode="after")
+    def public_boundary(self):
+        return protect_question(self)
 
 
 class PostBrief(BaseModel):
@@ -138,9 +141,19 @@ class FeedQuestionOut(BaseModel):
     answer_brief: str | None = None
     answer_ai: str | None = None
 
+    @model_validator(mode="after")
+    def public_boundary(self):
+        return protect_question(self)
 
-class PositionProfileOut(PositionProfile):
-    origin: str | None = None
+
+class PositionProfileOut(BaseModel):
+    category: str | None = None
+    specializations: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    status: str
+    source: str
+    taxonomy_version: int
 
 
 class PostFeedItem(BaseModel):
@@ -155,7 +168,6 @@ class PostFeedItem(BaseModel):
     companies: list[str] = Field(default_factory=list)
     positions: list[str] = Field(default_factory=list)
     position_profiles: list[PositionProfileOut] = Field(default_factory=list)
-    cleaned_text: str | None = None
     excerpt: str | None = None
     round_types: list[str] = Field(default_factory=list)
     question_count: int = 0

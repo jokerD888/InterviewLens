@@ -68,13 +68,23 @@ def langfuse_flush() -> None:
 # ------------------------------------------------------------------- Redis
 
 _redis_client: aioredis.Redis | None = None
+_cache_client: aioredis.Redis | None = None
 
 
 def get_redis() -> aioredis.Redis:
     global _redis_client
     if _redis_client is None:
-        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
     return _redis_client
+
+
+def get_cache_redis() -> aioredis.Redis:
+    global _cache_client
+    if not settings.cache_redis_url:
+        return get_redis()
+    if _cache_client is None:
+        _cache_client = aioredis.from_url(settings.cache_redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+    return _cache_client
 
 
 # Redis key prefixes (kept short on purpose)
@@ -220,7 +230,10 @@ async def node_span(
 
 
 async def close_redis():
-    global _redis_client
+    global _redis_client, _cache_client
     client, _redis_client = _redis_client, None
     if client is not None:
         await client.aclose()
+    cache, _cache_client = _cache_client, None
+    if cache is not None:
+        await cache.aclose()

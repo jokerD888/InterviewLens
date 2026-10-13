@@ -9,12 +9,12 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.processing_reads import READY_POST_SQL
-from ..crawler.cleaner import strip_nowcoder_noise
 from ..position_taxonomy import TAXONOMY_VERSION, PositionCategory
 from ..scoring import freshness_case_sql
 from .deps import get_session
 from .position_filters import profile_predicate
 from .schemas import FeedQuestionOut, PostFeedItem
+from .public_data import public_profile
 
 router = APIRouter(tags=["feed"])
 
@@ -30,7 +30,7 @@ async def feed(
     skills: Annotated[list[str] | None, Query()] = None,
     include_unreviewed: bool = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
     session: AsyncSession = Depends(get_session),
 ) -> list[PostFeedItem]:
     """Time-sorted post feed with optional company/position/category filters.
@@ -66,7 +66,7 @@ async def feed(
 
     freshness = freshness_case_sql()
     sql = f"""
-    SELECT po.id, po.title, po.source_url, po.posted_at, po.interview_date, po.cleaned_text,
+    SELECT po.id, po.title, po.source_url, po.posted_at, po.interview_date,
            po.content_score,
            {freshness} AS freshness_score,
            CASE WHEN po.content_score IS NULL THEN NULL
@@ -85,7 +85,7 @@ async def feed(
     WHERE {where}
     GROUP BY po.id
     HAVING COUNT(DISTINCT q.id) FILTER (WHERE q.id IS NOT NULL) > 0
-    ORDER BY po.posted_at DESC NULLS LAST
+    ORDER BY po.posted_at DESC NULLS LAST, po.id DESC
     LIMIT :limit OFFSET :offset
     """
     rows = (await session.execute(sa_text(sql), params)).mappings().all()
@@ -113,16 +113,14 @@ async def feed(
     """), {"post_ids": post_ids, "version": TAXONOMY_VERSION})).mappings().all()
     profile_map: dict[int, list[dict]] = {pid: [] for pid in post_ids}
     for profile_row in profile_rows:
-        profile_map[profile_row["post_id"]].append({**profile_row["payload"], "origin": profile_row["origin"]})
+        profile_map[profile_row["post_id"]].append(public_profile(profile_row["payload"]))
 
-    def _excerpt(questions: list[FeedQuestionOut], cleaned: str | None, max_chars: int = 200) -> str | None:
-        """Build excerpt from the first question, falling back to cleaned text."""
+    def _excerpt(questions: list[FeedQuestionOut], max_chars: int = 200) -> str | None:
+        """Only structured questions are eligible for the public excerpt."""
         if questions:
             q = questions[0].content
             return q[:max_chars] + "…" if len(q) > max_chars else q
-        if not cleaned:
-            return None
-        return cleaned[:max_chars] + "…" if len(cleaned) > max_chars else cleaned
+        return None
 
     return [
         PostFeedItem(
@@ -137,8 +135,7 @@ async def feed(
             ranking_score=r["ranking_score"],
             companies=list(r["companies"] or []),
             positions=list(r["positions"] or []),
-            cleaned_text=strip_nowcoder_noise(r["cleaned_text"]) if r["cleaned_text"] else None,
-            excerpt=_excerpt(q_map.get(r["id"], []), r["cleaned_text"]),
+            excerpt=_excerpt(q_map.get(r["id"], [])),
             round_types=list(r["round_types"] or []),
             question_count=r["question_count"],
             questions=q_map.get(r["id"], []),

@@ -8,6 +8,7 @@ posts or starts crawl/LLM jobs; a simulated 401 tests session expiry locally.
 import argparse
 import asyncio
 import json
+import ssl
 
 import httpx
 from playwright.async_api import async_playwright, expect
@@ -15,10 +16,11 @@ from playwright.async_api import async_playwright, expect
 from interviewlens.config import settings
 
 
-async def main(base_url):
+async def main(base_url, ca_file=None):
     assert len(settings.admin_api_token) >= 32, "Configure ADMIN_API_TOKEN before acceptance"
     base_url = base_url.rstrip("/")
-    async with httpx.AsyncClient(trust_env=False) as client:
+    verify = ssl.create_default_context(cafile=ca_file) if ca_file else True
+    async with httpx.AsyncClient(trust_env=False, verify=verify) as client:
         for path in ("health", "jobs", "metrics", "position-posts"):
             response = await client.get(f"{base_url}/api/admin/{path}")
             assert response.status_code == 401, f"Unauthorized admin read accepted: {path}"
@@ -26,7 +28,7 @@ async def main(base_url):
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         try:
-            page = await browser.new_page()
+            page = await browser.new_page(ignore_https_errors=bool(ca_file))
             requests = []
             page.on("request", lambda r: requests.append(r.url) if "/api/admin/" in r.url else None)
 
@@ -130,9 +132,10 @@ async def main(base_url):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:3013")
+    parser.add_argument("--ca-file", help="Private CA for isolated HTTPS acceptance")
     args = parser.parse_args()
     try:
-        asyncio.run(main(args.base_url))
+        asyncio.run(main(args.base_url, args.ca_file))
     except Exception as exc:
         # Browser call logs must never print a credential if a fill action fails.
         detail = str(exc)

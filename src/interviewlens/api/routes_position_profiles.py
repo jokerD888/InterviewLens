@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..position_taxonomy import DOMAINS, SKILLS, SPECIALIZATIONS, TAXONOMY_VERSION, PositionCategory
 from .deps import get_session
+from .public_data import public_profile
 
 router = APIRouter(tags=["position-taxonomy"])
 
@@ -42,12 +43,12 @@ async def position_taxonomy(session: Annotated[AsyncSession, Depends(get_session
 
 
 @router.get("/posts/{post_id}/position-profiles")
-async def post_profiles(post_id: int, session: Annotated[AsyncSession, Depends(get_session)]):
+async def post_profiles(post_id: Annotated[int, Path(ge=1, le=9223372036854775807)], session: Annotated[AsyncSession, Depends(get_session)]):
     rows = (
         (
             await session.execute(
                 text("""
-        SELECT payload, origin, input_hash FROM post_position_profiles
+        SELECT payload FROM post_position_profiles
         WHERE post_id=:post_id AND taxonomy_version=:version ORDER BY ordinal
     """),
                 {"post_id": post_id, "version": TAXONOMY_VERSION},
@@ -56,6 +57,4 @@ async def post_profiles(post_id: int, session: Annotated[AsyncSession, Depends(g
         .mappings()
         .all()
     )
-    return [
-        {**row["payload"], "origin": row["origin"], "input_hash": row["input_hash"]} for row in rows
-    ]
+    return [public_profile(row["payload"]) for row in rows]

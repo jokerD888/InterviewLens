@@ -21,6 +21,7 @@ from .routes_position_profiles import router as profiles_router
 from .routes_search import router as search_router
 from .routes_summary import router as summary_router
 from .routes_taxonomy import router as taxonomy_router
+from .resource_guard import PublicResourceGuard
 
 
 @asynccontextmanager
@@ -46,9 +47,12 @@ app = FastAPI(
     version="0.1.0",
     description="Aggregate Nowcoder interview experiences. See docs/ for design.",
     lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
 )
 
-# Local-dev CORS — allow any origin so Next.js dev server (3000) can call.
+# CORS is an explicit allowlist; production browser requests are same-origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.app_origins,
@@ -56,6 +60,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PublicResourceGuard)
 
 app.include_router(feed_router)
 app.include_router(taxonomy_router)
@@ -70,6 +75,8 @@ app.include_router(admin_router)
 
 @app.get("/", tags=["meta"])
 async def root() -> dict:
+    if settings.app_env == "production":
+        return {"name": "InterviewLens", "version": "0.1.0"}
     return {
         "name": "InterviewLens",
         "version": "0.1.0",

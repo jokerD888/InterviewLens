@@ -47,3 +47,6 @@ test-results/
 
 # Temp scraper / debug files
 scratch/
+deploy/.env.production
+deploy/private/
+backups/

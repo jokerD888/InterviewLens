@@ -33,6 +33,7 @@ def reset_after_fork():
     from .llm import cache, deepseek
 
     observability._redis_client = None
+    observability._cache_client = None
     observability._langfuse_client = None
     observability._langfuse_init_failed = False
     cache._redis = None

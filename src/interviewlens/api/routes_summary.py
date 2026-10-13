@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +18,9 @@ from ..observability import incr_cache
 from .cache import cache_json_get, cache_json_set
 from .deps import get_session
 from .schemas import QuestionOut, SummaryOut
+from .security import require_admin
 
-router = APIRouter(tags=["summary"])
+router = APIRouter(tags=["summary"], dependencies=[Depends(require_admin)])
 
 # Summaries are pre-computed offline; only change on re-aggregation.
 _SUMMARY_TTL = 3600
@@ -126,6 +128,8 @@ async def list_raw_questions(
     company: str,
     position: str,
     period: str = "all",
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0, le=100000)] = 0,
     session: AsyncSession = Depends(get_session),
 ) -> list[QuestionOut]:
     """Return every question (no dedup, no LLM) for this company+position."""
@@ -146,7 +150,8 @@ async def list_raw_questions(
               OR CAST(:period AS TEXT) = 'all'
               OR to_char(po.posted_at, 'YYYY"Q"Q') = :period
           )
-        ORDER BY q.category NULLS LAST, po.content_score DESC NULLS LAST
+        ORDER BY q.category NULLS LAST, po.content_score DESC NULLS LAST, q.id
+        LIMIT :limit OFFSET :offset
     """)
     rows = (
         await session.execute(
@@ -155,6 +160,8 @@ async def list_raw_questions(
                 "company": company,
                 "position": position,
                 "period": period,
+                "limit": limit,
+                "offset": offset,
             },
         )
     ).all()

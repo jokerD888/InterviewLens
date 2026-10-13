@@ -1,0 +1,12 @@
+[Unit]
+Description=InterviewLens daily PostgreSQL backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+WorkingDirectory=/opt/InterviewLens
+ExecStart=/usr/bin/python3 /opt/InterviewLens/scripts/production_ops.py backup --directory /var/backups/interviewlens
+# Failure is visible in systemctl/journalctl and must be connected to alerts.

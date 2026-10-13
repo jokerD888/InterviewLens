@@ -47,10 +47,10 @@ services:
       [
         "sh",
         "-c",
-        "npm install -g pnpm@9 && pnpm install && pnpm dev",
+        "npm install -g pnpm@11.25.0 && pnpm install --frozen-lockfile && pnpm dev",
       ]
     ports:
-      - "3013:3000"
+      - "127.0.0.1:3013:3000"
     depends_on:
       api:
         condition: service_healthy

@@ -1,0 +1,200 @@
+name: interviewlens-production
+
+x-app: &app
+  image: ${APP_IMAGE:?Set a versioned APP_IMAGE}
+  build:
+    context: ..
+  restart: unless-stopped
+  init: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  env_file: .env.production
+  environment: &app-env
+    APP_ENV: production
+    DATABASE_URL: postgresql+asyncpg://il:${POSTGRES_PASSWORD:?Required}@postgres:5432/interviewlens
+    DATABASE_URL_SYNC: postgresql+psycopg://il:${POSTGRES_PASSWORD:?Required}@postgres:5432/interviewlens
+    REDIS_URL: redis://:${REDIS_PASSWORD:?Required}@redis:6379/0
+    CACHE_REDIS_URL: redis://:${REDIS_CACHE_PASSWORD:?Required}@redis-cache:6379/0
+    CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?Required}@redis:6379/1
+    CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?Required}@redis:6379/2
+    APP_ORIGINS: '["https://${PUBLIC_DOMAIN:?Required}"]'
+    HF_HOME: /models
+    EMBEDDING_DEVICE: cpu
+    INFERPILOT_SERVER_URL: ""
+  volumes: [models:/models]
+  networks: [app, data]
+  mem_limit: 6g
+  cpus: 2.0
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: il
+      POSTGRES_DB: interviewlens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required}
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [data]
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U il -d interviewlens"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    user: redis
+    command: [redis-server, /etc/redis/redis.conf]
+    volumes:
+      - redis:/data
+      - ./redis-state.conf:/etc/redis/redis.conf:ro
+      - ./private/redis-state.acl:/run/redis.acl:ro
+    networks: [data]
+    mem_limit: 384m
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Required}
+    healthcheck:
+      test: [CMD-SHELL, "test \"$$(redis-cli ping)\" = PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis-cache:
+    image: redis:7-alpine
+    restart: unless-stopped
+    user: redis
+    command: [redis-server, /etc/redis/redis.conf]
+    volumes:
+      - ./redis-cache.conf:/etc/redis/redis.conf:ro
+      - ./private/redis-cache.acl:/run/redis.acl:ro
+    networks: [data]
+    mem_limit: 384m
+    environment:
+      REDISCLI_AUTH: ${REDIS_CACHE_PASSWORD:?Required}
+    healthcheck:
+      test: [CMD-SHELL, "test \"$$(redis-cli ping)\" = PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: *app
+    restart: "no"
+    command: [python, -m, interviewlens.db.migrate, apply]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *app
+    # One API process: bounded in-process inference, shared Redis IP quotas.
+    command: [uvicorn, interviewlens.api.app:app, --host, 0.0.0.0, --port, "8000", --workers, "1", --no-proxy-headers, --limit-concurrency, "64", --timeout-keep-alive, "5"]
+    environment:
+      <<: *app-env
+      HF_HUB_OFFLINE: "1"
+      TRUSTED_SEARCH_PROXY: "caddy"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8000/]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 600s
+  model-download:
+    <<: *app
+    restart: "no"
+    profiles: [setup]
+    command: [python, -c, "import asyncio; from interviewlens.embedding import get_model; asyncio.run(get_model())"]
+    environment:
+      <<: *app-env
+      HF_HUB_OFFLINE: "0"
+  worker:
+    <<: *app
+    profiles: [processing]
+    command: [celery, -A, interviewlens.tasks.celery_app, worker, --loglevel=INFO, --concurrency=1]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    environment:
+      <<: *app-env
+      LANGFUSE_HOST: http://langfuse:3000
+  langfuse-db:
+    image: postgres:16-alpine
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_DB: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?Required}
+    volumes: [langfuse-db:/var/lib/postgresql/data]
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  langfuse:
+    image: langfuse/langfuse:2
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?Required}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?Required}
+      SALT: ${LANGFUSE_SALT:?Required}
+      NEXTAUTH_URL: http://localhost:3001
+      TELEMETRY_ENABLED: "false"
+    networks: [app, data]
+    # Management UI accessible only through an SSH tunnel on the server.
+    ports: ["127.0.0.1:3001:3000"]
+    depends_on:
+      langfuse-db: {condition: service_healthy}
+  web:
+    image: ${WEB_IMAGE:?Set a versioned WEB_IMAGE}
+    build:
+      context: ../web
+      args: {NEXT_PUBLIC_API_BASE: "http://api:8000"}
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      API_BASE: http://api:8000
+      NODE_ENV: production
+    networks: [app]
+    mem_limit: 512m
+    cpus: 1.0
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Required}
+      ACME_EMAIL: ${ACME_EMAIL:?Required}
+      ADMIN_NETWORKS: ${ADMIN_NETWORKS:?Required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge, app]
+    depends_on:
+      web: {condition: service_healthy}
+
+networks:
+  edge: {}
+  app: {}
+  data: {internal: true}
+volumes:
+  postgres: {}
+  redis: {}
+  models: {}
+  caddy-data: {}
+  caddy-config: {}
+  langfuse-db: {}

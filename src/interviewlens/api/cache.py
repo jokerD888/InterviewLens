@@ -13,14 +13,18 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from ..logging import log
-from ..observability import get_redis
+from ..observability import get_cache_redis as get_redis
+from ..observability import get_redis as get_state_redis
+from ..config import settings
 
 _revision_key = "il:data:revision"
 _keys = ContextVar("read_cache_keys", default=None)
 
 
 async def versioned_key(key, r):
-    revision = int(await r.get(_revision_key) or 0)
+    # Durable revision must not be evicted alongside disposable cache entries.
+    state = get_state_redis() if settings.cache_redis_url else r
+    revision = int(await state.get(_revision_key) or 0)
     resolved = key if revision == 0 else f"{key}:r{revision}"
     _keys.set({**(_keys.get() or {}), key: resolved})
     return resolved
@@ -56,7 +60,7 @@ async def cache_json_set(key: str, value: Any, *, ttl_seconds: int, redis_client
 async def invalidate_read_caches():
     """Advance the read revision; old keys expire by TTL without scanning."""
     try:
-        r = get_redis()
+        r = get_state_redis() if settings.cache_redis_url else get_redis()
         await r.incr(_revision_key)
     except aioredis.RedisError:
         log.warning("api.cache_invalidation_failed", exc_info=True)

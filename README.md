@@ -72,7 +72,13 @@ ranking_score = content_score + freshness_score                # 只用于推荐
 - FastAPI、Next.js 15、TypeScript、Tailwind
 - Langfuse
 
-## 快速启动：Docker 全栈
+## 公网部署
+
+公网使用独立的 [生产部署与恢复说明](deploy/README.md) 和 `deploy/compose.production.yml`，不要直接暴露开发 Compose。生产配置只开放 HTTPS，隔离后台网络，强制密钥和 Redis 认证，包含版本迁移、备份、恢复、定时备份与回滚流程。
+
+首发公开页面为岗位方向浏览、最新面经和语义检索；旧摘要、题解生成与导出只在管理后台。公开 API 不返回抓取原始正文和内部分类证据；详情提供题目和原帖链接。生产环境关闭 `/docs`。
+
+## 快速启动：Docker 全栈（仅本机开发）
 
 ### 1. 准备配置
 
@@ -117,37 +123,11 @@ docker compose exec api uv run il seed-demo
 - API 文档：<http://localhost:8000/docs>
 - Langfuse：<http://localhost:3001>
 
-### 已有数据库的迁移
+### 数据库版本迁移
 
-`sql/001_init.sql` 只会在 PostgreSQL 数据卷首次创建时自动执行。已有数据库需要按顺序执行尚未执行的迁移（下面两种导入方式二选一）：
+SQL 当前为 001～013。生产服务使用 `python -m interviewlens.db.migrate apply` 按序迁移；SHA-256 校验、版本登记和事务锁保护已应用版本。不要依赖 PostgreSQL 初始化目录更新已有数据卷。
 
-```bash
-# macOS / Linux
-docker compose exec -T postgres psql -U il -d interviewlens < sql/003_content_score.sql
-docker compose exec -T postgres psql -U il -d interviewlens < sql/004_split_aliases_canonical_embeddings.sql
-docker compose exec -T postgres psql -U il -d interviewlens < sql/005_summary_input_fingerprint.sql
-docker compose exec -T postgres psql -U il -d interviewlens < sql/006_drop_unused_position_level.sql
-docker compose exec -T postgres psql -U il -d interviewlens < sql/007_database_integrity.sql
-# PowerShell
-Get-Content sql/003_content_score.sql | docker compose exec -T postgres psql -U il -d interviewlens
-Get-Content sql/004_split_aliases_canonical_embeddings.sql | docker compose exec -T postgres psql -U il -d interviewlens
-Get-Content sql/005_summary_input_fingerprint.sql | docker compose exec -T postgres psql -U il -d interviewlens
-Get-Content sql/006_drop_unused_position_level.sql | docker compose exec -T postgres psql -U il -d interviewlens
-Get-Content sql/007_database_integrity.sql | docker compose exec -T postgres psql -U il -d interviewlens
-docker compose exec api uv run il rescore --all
-docker compose exec api uv run il seed-aliases
-docker compose exec api uv run il backfill-canonical-embeddings
-docker compose exec api uv run il backfill-embeddings
-```
-
-迁移不会直接复制旧的 `quality_score`，因为旧分数可能已经包含时间衰减，无法无损还原为内容分。
-`004` 会把旧 `alias_dict` 按实体类型迁移到 `company_aliases` 和 `position_aliases`，同时为 `companies` / `positions` 增加向量列和 HNSW 索引；迁移前会检查孤儿 canonical 引用，发现异常时整笔事务回滚。
-`005` 为 `summaries` 增加 Aggregator 输入指纹列；已有摘要指纹为空，会在下一次聚合时自动重算并补齐。
-`006` 删除 `positions.level` 预留字段。招聘层级目前只存在于单篇面经的抽取结果（`ExtractedPost.level`）中，尚未持久化；它不属于规范岗位实体，原字段没有业务读写。
-`007` 增加 `interview_date`、embedding 模型/版本元数据、关系复合索引和数据完整性约束；迁移中的约束先以 `NOT VALID` 保护新写入，清理旧数据后再执行 `VALIDATE CONSTRAINT`。
-执行 `007` 后应重新运行两类 embedding 回填；查询只接受当前 `embedding_model + embedding_version`，避免混用不同模型生成的向量。
-
-## 常用工作流
+旧 013 数据库先备份、在独立库恢复核对，再明确执行 `python -m interviewlens.db.migrate baseline` 登记版本；之后 `status`/`apply` 检查更新。未知版本或更旧的数据库不能直接假定已到 013，应先在恢复副本核对已执行迁移并升级。完整流程见 [部署文档](deploy/README.md)。
 
 ### 处理单篇面经
 
@@ -231,7 +211,7 @@ docker compose exec api uv run il daily-update
 
 ## REST API
 
-主要接口如下，完整定义可直接查看 `/docs`：
+主要接口如下，开发环境可查看 `/docs`；生产环境关闭 API 文档，摘要、生成、导出和 `/admin/*` 必须管理员认证：
 
 | 接口 | 用途 |
 |---|---|

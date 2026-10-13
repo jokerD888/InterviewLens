@@ -10,7 +10,7 @@ from typing import Annotated
 
 import numpy as np
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -21,12 +21,13 @@ from ..db import Post
 from ..db.attribution import question_scope_sql
 from ..embedding import EMBEDDING_VERSION, embed_texts
 from ..logging import log
-from ..observability import get_redis, incr_cache
+from ..observability import get_cache_redis as get_redis, incr_cache
 from ..position_taxonomy import TAXONOMY_VERSION, PositionCategory
 from ..scoring import FRESHNESS_POLICY_VERSION, freshness_case_sql, ranking_score, score_freshness
 from .deps import get_session
 from .position_filters import profile_predicate
 from .schemas import PostBrief, QuestionOut
+from .resource_guard import bounded_search_embed
 
 router = APIRouter(tags=["search"])
 
@@ -111,7 +112,7 @@ async def search(
     domains: Annotated[list[str] | None, Query()] = None,
     skills: Annotated[list[str] | None, Query()] = None,
     include_unreviewed: bool = False,
-    min_quality: int = 0,
+    min_quality: Annotated[int, Query(ge=0, le=100)] = 0,
     limit: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> list[QuestionOut]:
@@ -163,10 +164,10 @@ async def search(
             qvec = qvec_arr.reshape(1, -1)
         else:
             await incr_cache(False)
-            qvec = await embed_texts([q])
+            qvec = await bounded_search_embed(lambda: embed_texts([q]))
             await _embed_cache_set(ekey, qvec[0])
     else:
-        qvec = await embed_texts([q])
+        qvec = await bounded_search_embed(lambda: embed_texts([q]))
 
     if qvec.size == 0:
         return []
@@ -228,7 +229,7 @@ async def search(
 
 @router.get("/posts/{post_id}", response_model=PostBrief)
 async def get_post(
-    post_id: int,
+    post_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
     session: AsyncSession = Depends(get_session),
 ) -> PostBrief:
     post = (await session.execute(select(Post).where(Post.id == post_id))).scalar_one_or_none()

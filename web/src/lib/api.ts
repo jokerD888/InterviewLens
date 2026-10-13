@@ -131,8 +131,7 @@ export type PostFeedItem = {
   interview_date: string | null;
   companies: string[];
   positions: string[];
-  position_profiles: PositionProfile[];
-  cleaned_text: string | null;
+  position_profiles: Pick<PositionProfile, "category" | "specializations" | "domains" | "skills" | "status" | "source">[];
   excerpt: string | null;
   round_types: string[];
   question_count: number;
@@ -246,8 +245,8 @@ export const paths = {
   summary: (company: string, position: string, period = "all") =>
     `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}${qs({ period })}`,
 
-  rawQuestions: (company: string, position: string, period = "all") =>
-    `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}/questions${qs({ period })}`,
+  rawQuestions: (company: string, position: string, period = "all", offset = 0) =>
+    `/summaries/${encodeURIComponent(company)}/${encodeURIComponent(position)}/questions${qs({ period, limit: 100, offset })}`,
 
   health: () => `/admin/health`,
   positionPosts: (q = "") => `/admin/position-posts${qs({ q })}`,
@@ -266,7 +265,7 @@ export class HttpError extends Error {
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (typeof window !== "undefined" && (path.startsWith("/admin/") || path.startsWith("/bridge/"))) {
+  if (typeof window !== "undefined" && (path.startsWith("/admin/") || path.startsWith("/bridge/") || path.startsWith("/summaries"))) {
     const token = sessionStorage.getItem("il-admin-token");
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }

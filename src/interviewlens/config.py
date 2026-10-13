@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        hide_input_in_errors=True,
     )
 
     # ---- Database ----
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
 
     # ---- Redis / Celery ----
     redis_url: str = "redis://localhost:6380/0"
+    cache_redis_url: str | None = None
     celery_broker_url: str = "redis://localhost:6380/1"
     celery_result_backend: str = "redis://localhost:6380/2"
 
@@ -74,6 +76,11 @@ class Settings(BaseSettings):
 
     # ---- App ----
     app_env: str = "dev"
+    public_requests_per_minute: int = Field(default=120, ge=1, le=10000)
+    search_requests_per_minute: int = Field(default=12, ge=1, le=1000)
+    search_concurrency: int = Field(default=1, ge=1, le=4)
+    search_timeout_seconds: float = Field(default=30, ge=1, le=120)
+    trusted_search_proxy: str = ""
     log_level: str = "INFO"
     extract_prompt_version: int = 1
     answer_prompt_version: int = 1
@@ -86,6 +93,25 @@ class Settings(BaseSettings):
     # ---- Bridge to daily-interview-prep ----
     daily_prep_api_url: str = "http://localhost:8000/api"
     daily_prep_token: str = ""
+
+    @model_validator(mode="after")
+    def production_safety(self):
+        if self.app_env == "production":
+            from urllib.parse import urlsplit
+
+            if len(self.admin_api_token) < 32 or "REPLACE" in self.admin_api_token:
+                raise ValueError("Production requires a strong administrator credential")
+            for name in ("database_url", "redis_url", "cache_redis_url", "celery_broker_url", "celery_result_backend"):
+                address = getattr(self, name)
+                password = urlsplit(address or "").password or ""
+                if len(password) < 32 or "REPLACE" in password:
+                    raise ValueError(f"Production requires authenticated {name}")
+            state, cache = urlsplit(self.redis_url), urlsplit(self.cache_redis_url or "")
+            if (state.hostname, state.port or 6379) == (cache.hostname, cache.port or 6379):
+                raise ValueError("Production cache and durable Redis must be separate instances")
+            if any(not origin.startswith("https://") for origin in self.app_origins):
+                raise ValueError("Production origins must use HTTPS")
+        return self
 
 
 @lru_cache(maxsize=1)

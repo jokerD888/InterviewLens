@@ -16,7 +16,7 @@ _redis: aioredis.Redis | None = None
 def _get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        _redis = aioredis.from_url(settings.cache_redis_url or settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
     return _redis
 
 

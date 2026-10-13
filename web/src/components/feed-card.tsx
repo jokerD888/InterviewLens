@@ -85,14 +85,8 @@ export function FeedCard({ post }: Props) {
             {post.position_profiles?.map((profile, index) => (
               <section key={index} className="text-sm text-muted">
                 <h4 className="mb-2 text-ink">岗位信息</h4>
-                <p>原始名称：{profile.raw_title ?? "原文未明确"}</p>
-                {profile.normalized_title && <p>规范名称：{profile.normalized_title}</p>}
                 {profile.skills.length > 0 && <p>技术栈：{profile.skills.join(" / ")}</p>}
-                <ul className="mt-2 space-y-1">
-                  {profile.evidence.map((evidence, n) => (
-                    <li key={n}>{evidence.value} · {({ declared: "原文明示", responsibility: "职责描述", interview: "面试考察", project: "个人项目", inferred: "内容推断" } as Record<string, string>)[evidence.source] ?? evidence.source}：{evidence.quote}</li>
-                  ))}
-                </ul>
+
               </section>
             ))}
             {post.questions.length > 0 && (

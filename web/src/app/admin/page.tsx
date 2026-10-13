@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import useSWR, { useSWRConfig } from "swr";
 import { Activity, Boxes, Gauge, Inbox, Trash2, Loader2, Send } from "lucide-react";
 import {
@@ -36,6 +37,7 @@ function AdminDashboard() {
       <div className="rise rise-1">
         <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-accent">控制台</p>
         <h1 className="font-display text-2xl font-black tracking-masthead text-ink">管理后台</h1>
+        <div className="mt-3 flex gap-5 text-sm underline"><Link href="/admin/search">题解生成与导出</Link><Link href="/admin/summaries">历史摘要管理</Link></div>
       </div>
 
       <div className="rise rise-2 grid grid-cols-1 gap-5 lg:grid-cols-2">

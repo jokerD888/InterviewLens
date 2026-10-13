@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
+import useSWRInfinite from "swr/infinite";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { summaryPlugins } from "@/lib/summary-markdown.mjs";
@@ -20,12 +21,15 @@ export function SummaryView({ company, position, period = "all" }: Props) {
   const { data, error, isLoading } = useSWR<Summary>(url, fetcher);
 
   // 完整题目清单
-  const rawUrl = company && position ? paths.rawQuestions(company, position, period) : null;
   const [showRaw, setShowRaw] = useState(false);
-  const { data: rawQuestions, isLoading: rawLoading } = useSWR<Question[]>(
-    showRaw ? rawUrl : null,
+  const { data: rawPages, isLoading: rawLoading, isValidating, size, setSize, error: rawError } = useSWRInfinite<Question[]>(
+    (index, previous) => {
+      if (!showRaw || !company || !position || (previous && previous.length < 100)) return null;
+      return paths.rawQuestions(company, position, period, index * 100);
+    },
     fetcher,
   );
+  const rawQuestions = rawPages?.flat();
 
   if (!company || !position) {
     return (
@@ -49,8 +53,7 @@ export function SummaryView({ company, position, period = "all" }: Props) {
         <Empty
           eyebrow="尚无记录"
           title="该 公司 × 岗位 × 周期 暂无摘要"
-          hint={`运行 il aggregate --company ${company} --position ${position} 生成`}
-          code
+          hint="尚未生成此范围的摘要，请通过维护流程更新。"
         />
       );
     return <div className="p-6 font-mono text-sm text-bad">加载失败：{msg}</div>;
@@ -71,7 +74,7 @@ export function SummaryView({ company, position, period = "all" }: Props) {
           {data.position}
         </h1>
         <p className="mt-2 font-mono text-[11px] uppercase tracking-wider text-muted">
-          基于 {data.sample_count} 道题
+          历史摘要 · 基于 {data.sample_count} 道题（可能未包含最新面经）
           {data.updated_at && (
             <span className="text-muted/70">
               {"  ·  "}更新于 {new Date(data.updated_at).toLocaleDateString("zh-CN")}
@@ -92,7 +95,7 @@ export function SummaryView({ company, position, period = "all" }: Props) {
           className="group flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-muted/50 hover:text-muted transition-colors"
         >
           {showRaw ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          📋 完整题目清单
+          📋 当前范围题目清单
           {rawQuestions && (
             <span className="text-muted/30">（{rawQuestions.length} 道）</span>
           )}
@@ -109,6 +112,8 @@ export function SummaryView({ company, position, period = "all" }: Props) {
             <p className="py-4 font-mono text-xs text-muted">暂无原始题目数据。</p>
           )
         )}
+        {showRaw && rawError && <p className="mt-2 text-sm text-bad">题目加载失败，请稍后重试。</p>}
+        {showRaw && rawPages?.at(-1)?.length === 100 && <button disabled={isValidating} onClick={() => setSize(size + 1)} className="mt-3 text-sm underline disabled:opacity-50">{isValidating ? "加载中…" : "加载更多题目"}</button>}
       </div>
     </article>
   );

@@ -93,9 +93,9 @@ function Colophon() {
   return (
     <footer className="mt-8 border-t border-border">
       <div className="mx-auto flex max-w-screen-2xl flex-wrap items-center justify-between gap-2 px-6 py-4 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-        <span>InterviewLens · 个人用途 · 内容不二次发布</span>
+        <span>InterviewLens · 面试学习参考</span>
         <span className="text-muted/70">
-          Crawler → Cleaner → Extractor → Normalizer → Scorer · LangGraph
+          题目整理自公开面经，详情保留原帖链接；AI 答案仅供参考。
         </span>
       </div>
     </footer>

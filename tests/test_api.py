@@ -94,6 +94,8 @@ def test_companies_with_counts() -> None:
 
 
 def test_summary_404_when_missing() -> None:
+    from interviewlens.api.security import require_admin
+    app.dependency_overrides[require_admin] = lambda: None
     app.dependency_overrides[get_session] = _override_session_with({})
     try:
         with TestClient(app) as client:

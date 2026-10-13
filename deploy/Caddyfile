@@ -1,0 +1,38 @@
+{
+    admin off
+    email {$ACME_EMAIL}
+}
+
+{$PUBLIC_DOMAIN} {
+    encode gzip zstd
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+    request_body {
+        max_size 1MB
+    }
+    # Use the socket peer, never caller-supplied X-Forwarded-For.
+    # Keep Caddy directly behind the host firewall; CDN needs a separate review.
+    @private {
+        path /admin /admin/* /api/admin /api/admin/* /bridge /bridge/* /api/bridge /api/bridge/* /api/api/bridge /api/api/bridge/* /summaries /summaries/* /api/summaries /api/summaries/*
+        not remote_ip {$ADMIN_NETWORKS}
+    }
+    route {
+        respond @private "Forbidden" 403
+        @api path /api /api/*
+        handle @api {
+            uri strip_prefix /api
+            reverse_proxy api:8000 {
+                header_up X-IL-Client-IP {remote_host}
+            }
+        }
+        # No backend compatibility routes bypass the /api gate.
+        @direct path /bridge /bridge/* /summaries /summaries/* /docs /redoc /openapi.json
+        respond @direct "Not found" 404
+        reverse_proxy web:3000
+    }
+}
