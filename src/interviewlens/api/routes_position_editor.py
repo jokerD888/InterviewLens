@@ -103,6 +103,9 @@ async def load_editor(post_id: int, session: Session):
 
 @router.put("/posts/{post_id}/position-profiles")
 async def correct_positions(post_id: int, body: Correction, session: Session):
+    from ..db.write_lock import lock_write_generation
+
+    await lock_write_generation(session)
     await session.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": post_id})
     await session.execute(text("SELECT id FROM posts WHERE id=:id FOR UPDATE"), {"id": post_id})
     _, author, state = await editor_state(session, post_id)

@@ -22,6 +22,9 @@
         not remote_ip {$ADMIN_NETWORKS}
     }
     route {
+        # Deep probes are for container/supervisor use, never public traffic.
+        @readiness path /api/health/ready /api/health/ready/* /health/ready /health/ready/*
+        respond @readiness "Not found" 404
         respond @private "Forbidden" 403
         @api path /api /api/*
         handle @api {

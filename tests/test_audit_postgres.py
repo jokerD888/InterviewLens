@@ -32,7 +32,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest_asyncio.fixture
-async def database(monkeypatch):
+async def database(monkeypatch,request):
     dsn = os.environ["IL_TEST_BACKFILL_DSN"]
     schema = "test_audit_" + uuid.uuid4().hex
     connection = await asyncpg.connect(dsn.replace("postgresql+asyncpg://", "postgresql://"))
@@ -46,8 +46,12 @@ async def database(monkeypatch):
             "011_pipeline_recovery.sql",
             "012_site_request_guard.sql",
             "013_interview_attribution.sql",
+            "014_read_revision.sql",
         ):
-            await connection.execute((sql / name).read_text(encoding="utf-8"))
+            body=(sql / name).read_text(encoding="utf-8").replace('public.il_read_revision',f'"{schema}".il_read_revision')
+            await connection.execute(body)
+        if getattr(request,'param',True):
+            await connection.execute((sql/'015_write_lock_order.sql').read_text(encoding='utf-8'))
         engine = create_async_engine(
             dsn, connect_args={"server_settings": {"search_path": schema + ",public"}}
         )

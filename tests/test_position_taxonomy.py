@@ -106,8 +106,8 @@ async def test_historical_preview_never_overwrites_existing_profiles():
     await save_profiles(
         session, 1, [preview_title("后端开发")], "后端开发", origin="historical_preview"
     )
-    assert session.execute.await_count == 2
-    assert all("DELETE" not in str(call.args[0]) for call in session.execute.await_args_list)
+    # Taking an additional coordination lock must not modify existing profiles.
+    assert all(str(call.args[0]).lstrip().startswith('SELECT') for call in session.execute.await_args_list)
 
 
 def test_model_cannot_claim_human_approval():

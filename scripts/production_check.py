@@ -11,6 +11,7 @@ from pathlib import Path
 import urllib.request
 
 from production_ops import compose, invoke
+from backup_manifest import read_backup
 
 
 def check(root: Path, backups: Path):
@@ -20,16 +21,25 @@ def check(root: Path, backups: Path):
     database=urlsplit(configuration["services"]["api"]["environment"]["DATABASE_URL"]).path.lstrip('/')
     invoke(prefix+["exec","-T","api","curl","-fsS","--max-time","5","http://127.0.0.1:8000/health/ready"],timeout=15)
     eligible=[]
-    for path in backups.glob('interviewlens-*.json'):
+    current=datetime.now(timezone.utc)
+    for path in backups.glob('interviewlens-*.dump'):
         try:
-            metadata=json.loads(path.read_text(encoding='utf-8'))
-            if metadata.get('database')==database and metadata.get('counts_stable') and path.with_suffix('.dump').is_file():
-                eligible.append(path.stat().st_mtime)
+            entry=read_backup(path,verify_hash=False,now=current)
+            age=(current-entry.created).total_seconds()
+            if entry.database==database and -300<=age<=26*3600:
+                eligible.append(entry)
         except (ValueError,OSError):
             continue
-    if not eligible or datetime.now(timezone.utc).timestamp()-max(eligible)>26*3600:
-        raise RuntimeError('No recent verified-source backup for the active database')
-    print(json.dumps({'status':'ready','recent_backup':True,'database':database}))
+    for entry in sorted(eligible,key=lambda entry:entry.created,reverse=True):
+        try:
+            read_backup(entry.dump,now=current)
+        except (ValueError,OSError):
+            continue
+        print(json.dumps({'status':'ready','recent_backup':True,'database':database,
+                          'backup_created_utc':entry.created.isoformat(),
+                          'restore_verified':entry.verified}))
+        return
+    raise RuntimeError('No recent intact stable-source backup for the active database')
 
 
 def notify(unit: str):

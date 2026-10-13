@@ -116,14 +116,19 @@ def test_backup_uses_configured_source_and_rejects_other_database(monkeypatch,tm
 def test_retention_dry_run_then_preserves_verified_and_latest(monkeypatch,tmp_path):
     from pathlib import Path
     import os,time
+    import hashlib
+    from datetime import datetime,timezone
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'scripts'))
     import production_ops as ops
     for number in range(6):
-        dump=tmp_path/f'interviewlens-20250101T000000Z-{number:06x}.dump'
-        dump.write_bytes(b'synthetic')
-        metadata={'restore_verified_at':'2025-01-01T00:00:00Z'} if number in (1,2,3,4) else {}
-        dump.with_suffix('.json').write_text(json.dumps(metadata))
         old=time.time()-(20+number)*86400
+        stamp=datetime.fromtimestamp(old,timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        dump=tmp_path/f'interviewlens-{stamp}-{number:06x}.dump'
+        dump.write_bytes(b'synthetic')
+        metadata={'restore_verified_at':datetime.now(timezone.utc).isoformat()} if number in (1,2,3,4) else {}
+        metadata.update(database='active',file=dump.name,sha256=hashlib.sha256(b'synthetic').hexdigest(),
+                        counts_stable=True,created_utc=datetime.fromtimestamp(old,timezone.utc).isoformat())
+        dump.with_suffix('.json').write_text(json.dumps(metadata))
         os.utime(dump,(old,old))
     ops.retention(tmp_path.resolve())
     assert len(list(tmp_path.glob('*.dump')))==6

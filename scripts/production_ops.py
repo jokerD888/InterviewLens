@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,7 @@ import subprocess
 import uuid
 from private_files import private_directory, private_file
 from urllib.parse import urlsplit
+from backup_manifest import file_sha256, read_backup
 
 
 def invoke(command, **kwargs):
@@ -28,14 +28,6 @@ def invoke(command, **kwargs):
 
 def compose(root: Path):
     return ["docker", "compose", "--env-file", str(root / ".env.production"), "-f", str(root / "compose.production.yml")]
-
-
-def file_sha256(path: Path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1_048_576), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 class Database:
@@ -108,7 +100,8 @@ def backup(base: Database, destination: Path, database: str):
     digest = file_sha256(target)
     after = counts(base, database)
     manifest = {"created_utc": stamp, "file": target.name, "sha256": digest,
-                "database": database, "before": before, "after": after, "counts_stable": before == after}
+                "database": database, "size_bytes": target.stat().st_size,
+                "before": before, "after": after, "counts_stable": before == after}
     sidecar = target.with_suffix(".json")
     sidecar.touch(mode=0o600, exist_ok=False)
     private_file(sidecar)
@@ -144,14 +137,15 @@ def restore(base: Database, source: Path, database: str):
 
 
 def retention(directory: Path, keep_days: int = 14, apply: bool = False):
-    """Only generated backup pairs; dry-run by default; keep 3 verified dumps.
+    """Keep the newest and 3 intact, restored dumps per source database.
 
     Never remove symlinks, paths outside the dedicated directory, recent files,
-    or the newest backup. Nothing is pruned before 3 restore drills exist.
+    or the newest backup. Each database requires 3 intact restore drills first.
     """
     if keep_days < 14 or directory in (Path(directory.anchor), Path.home(), Path.cwd()):
         raise ValueError("Dedicated directory and at least 14 days are required")
     entries=[]
+    skipped=0
     for dump in directory.glob('interviewlens-*.dump'):
         sidecar=dump.with_suffix('.json')
         if dump.is_symlink() or sidecar.is_symlink() or not sidecar.is_file():
@@ -161,24 +155,30 @@ def retention(directory: Path, keep_days: int = 14, apply: bool = False):
         if not re.fullmatch(r'interviewlens-\d{8}T\d{6}Z-[0-9a-f]{6}\.dump',dump.name):
             continue
         try:
-            metadata=json.loads(sidecar.read_text(encoding='utf-8'))
+            entry=read_backup(dump)
         except (ValueError,OSError):
+            skipped+=1
             continue
-        entries.append((dump.stat().st_mtime,dump,sidecar,metadata.get('restore_verified_at')))
-    entries.sort(key=lambda entry:entry[0],reverse=True)
-    verified=[entry for entry in entries if entry[3]]
-    if len(verified)<3:
-        print(json.dumps({'pruned':0,'reason':'keep all until three verified restores exist'}))
-        return
-    protected={entry[1] for entry in verified[:3]}
-    protected.add(entries[0][1])
+        entries.append(entry)
+    groups={}
+    for entry in entries:
+        groups.setdefault(entry.database,[]).append(entry)
     cutoff=datetime.now(timezone.utc).timestamp()-keep_days*86400
-    candidates=[entry for entry in entries if entry[0]<cutoff and entry[1] not in protected]
-    for _,dump,sidecar,_ in candidates:
+    candidates=[]
+    for group in groups.values():
+        group.sort(key=lambda entry:entry.created,reverse=True)
+        verified=[entry for entry in group if entry.verified]
+        if len(verified)<3:
+            continue
+        protected={entry.dump for entry in verified[:3]}
+        protected.add(group[0].dump)
+        candidates.extend(entry for entry in group if entry.created.timestamp()<cutoff and entry.dump not in protected)
+    for entry in candidates:
         if apply:
             # Resolved paths were verified above; no recursive deletion.
-            dump.unlink(); sidecar.unlink()
-    print(json.dumps({'candidates':len(candidates),'pruned':len(candidates) if apply else 0,'dry_run':not apply}))
+            entry.dump.unlink(); entry.dump.with_suffix('.json').unlink()
+    print(json.dumps({'candidates':len(candidates),'pruned':len(candidates) if apply else 0,
+                      'dry_run':not apply,'databases':len(groups),'skipped_unverified_pairs':skipped}))
 
 
 if __name__ == "__main__":

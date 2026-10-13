@@ -1,7 +1,7 @@
 # ============================================================
 # InterviewLens · Backend image (FastAPI + Celery Worker)
 # ============================================================
-FROM python:3.13-slim AS runtime
+FROM python:3.13-slim AS dependencies
 
 WORKDIR /app
 
@@ -16,13 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
-# ---- Layer 3: source + project install (lightweight: uv sync only does "pip install -e .") ----
-COPY src/ ./src/
-COPY data/ ./data/
-COPY sql/ ./sql/
-COPY README.md ./
-RUN uv sync --frozen --no-dev --no-cache
-
 # ---- HuggingFace cache volume mount point ----
 ENV HF_HOME=/models \
     PATH="/app/.venv/bin:$PATH" \
@@ -32,17 +25,32 @@ ENV HF_HOME=/models \
 RUN useradd --uid 10001 --create-home app \
     && mkdir -p /models /app/.cache/huggingface \
     && chown -R app:app /models /app/.cache
+
+# Cache browser/system packages before source changes. API never inherits them.
+FROM dependencies AS browser_dependencies
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN .venv/bin/playwright install --with-deps chromium \
+    && chown -R app:app /opt/playwright
+
+FROM dependencies AS runtime
+COPY src/ ./src/
+COPY data/ ./data/
+COPY sql/ ./sql/
+COPY README.md ./
+RUN uv sync --frozen --no-dev --no-cache
 USER app
 
 EXPOSE 8000
 
 CMD ["uvicorn", "interviewlens.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
-FROM runtime AS worker
-USER root
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-RUN .venv/bin/playwright install --with-deps chromium \
-    && chown -R app:app /opt/playwright
+FROM browser_dependencies AS worker
+COPY src/ ./src/
+COPY data/ ./data/
+COPY sql/ ./sql/
+COPY README.md ./
+RUN uv sync --frozen --no-dev --no-cache
 USER app
+CMD ["uvicorn", "interviewlens.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM runtime AS api

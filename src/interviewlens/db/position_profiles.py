@@ -8,6 +8,7 @@ import json
 from sqlalchemy import text
 
 from ..position_taxonomy import PositionProfile
+from .write_lock import lock_write_generation
 
 
 async def save_post_companies(session, post_id: int, company_ids: list[int]) -> None:
@@ -35,6 +36,7 @@ async def save_profiles(
     refresh_preview: bool = False,
 ) -> None:
     # Serialize competing extractions, previews and manual reviews for this post.
+    await lock_write_generation(session)
     await session.execute(text("SELECT pg_advisory_xact_lock(:post_id)"), {"post_id": post_id})
     # New extraction replaces only this derived profile set, in the caller's transaction.
     # A historical preview must never overwrite profiles produced by extraction.

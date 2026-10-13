@@ -8,6 +8,7 @@ import json
 from sqlalchemy import text
 
 from ..db import session_scope
+from ..db.write_lock import lock_write_generation
 
 LEASE_SECONDS = 300
 
@@ -69,6 +70,7 @@ async def claim(post_id: int, owner: str, source: str) -> dict | None:
 async def fence(session, post_id: int, owner: str | None) -> None:
     if not owner:
         return
+    await lock_write_generation(session)
     # Lock the lease row until the business transaction commits. A stale worker
     # cannot commit after a replacement owner has acquired the post.
     row = (

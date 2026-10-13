@@ -137,6 +137,9 @@ async def replace_questions(
     2. Adds new questions that didn't exist before.
     3. Removes orphaned questions that no longer appear in the extracted rounds.
     """
+    from .write_lock import lock_write_generation
+
+    await lock_write_generation(session)
     await session.execute(text("SELECT pg_advisory_xact_lock(73419, :id)"), {"id": post_id})
     existing_result = await session.execute(select(Question).where(Question.post_id == post_id))
     existing_rows = list(existing_result.scalars().all())

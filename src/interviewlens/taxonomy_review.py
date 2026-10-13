@@ -13,6 +13,7 @@ from sqlalchemy import text
 from .crawler.cleaner import strip_nowcoder_noise
 from .db.position_profiles import save_profiles
 from .db.session import session_scope
+from .db.write_lock import lock_write_generation
 from .position_taxonomy import PositionProfile, validate_evidence
 
 
@@ -30,6 +31,7 @@ async def import_reviews(path: Path):
             if post_id in seen:
                 raise ValueError(f"duplicate review for post {post_id}")
             seen.add(post_id)
+            await lock_write_generation(session)
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(:post_id)"), {"post_id": post_id}
             )
