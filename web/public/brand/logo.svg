@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="#DF6845">
+  <title>InterviewLens IL monogram</title>
+  <g id="mark">
+    <path d="M10 8H53V15C43 15 34 22 34 32C34 39 37 44 43 47V120H8V118C16 116 20 112 20 104V24C20 16 16 12 10 12Z"/>
+    <path d="M57 15C68 16 75 24 75 34V93C75 104 80 111 89 111C99 111 111 99 119 87H121L114 120H48V48C57 50 66 43 66 32C66 25 62 19 57 16Z"/>
+  </g>
+</svg>

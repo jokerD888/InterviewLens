@@ -1,11 +1,31 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
+import Image from "next/image";
 import "./globals.css";
 import { ThemeToggle } from "../components/theme-toggle";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://interview.819266.xyz"),
   title: "InterviewLens — 面经档案馆",
-  description: "Aggregate Nowcoder interview experiences with a LangGraph agent pipeline",
+  description: "聚合公开面经，按公司与岗位方向浏览，通过语义检索查找面试问题。",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48", type: "image/x-icon" },
+      { url: "/favicon.svg", sizes: "any", type: "image/svg+xml" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  manifest: "/site.webmanifest",
+  openGraph: {
+    type: "website", locale: "zh_CN", siteName: "InterviewLens",
+    title: "InterviewLens — 面经档案馆",
+    description: "聚合公开面经，按公司与岗位方向浏览，通过语义检索查找面试问题。",
+    images: [{ url: "/brand/share-card.png", width: 1200, height: 630, alt: "InterviewLens 面经档案馆" }],
+  },
+  twitter: {
+    card: "summary_large_image", title: "InterviewLens — 面经档案馆",
+    images: ["/brand/share-card.png"],
+  },
 };
 
 export default function RootLayout({
@@ -44,10 +64,11 @@ export default function RootLayout({
 function Masthead() {
   return (
     <header className="border-b-2 border-ink/80 bg-bg">
-      <div className="mx-auto flex max-w-screen-2xl items-end justify-between gap-6 px-6 pb-2 pt-4">
+      <div className="mx-auto flex max-w-screen-2xl flex-wrap items-end justify-between gap-x-6 gap-y-3 px-6 pb-2 pt-4">
         <div className="flex items-baseline gap-4">
-          <Link href="/" className="group flex items-baseline gap-3">
-            <span className="font-display text-2xl font-black leading-none tracking-masthead text-ink">
+          <Link href="/" aria-label="InterviewLens 首页" className="group flex items-center gap-2.5">
+            <Image src="/brand/logo.svg" alt="" width={40} height={40} unoptimized className="h-8 w-8 shrink-0 sm:h-10 sm:w-10" />
+            <span className="font-display text-xl font-black leading-none tracking-masthead text-ink sm:text-2xl">
               Interview<span className="text-accent">Lens</span>
             </span>
           </Link>
@@ -93,7 +114,10 @@ function Colophon() {
   return (
     <footer className="mt-8 border-t border-border">
       <div className="mx-auto flex max-w-screen-2xl flex-wrap items-center justify-between gap-2 px-6 py-4 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
-        <span>InterviewLens · 面试学习参考</span>
+        <span className="inline-flex items-center gap-2">
+          <Image src="/brand/logo.svg" alt="" width={20} height={20} unoptimized />
+          InterviewLens · 面试学习参考
+        </span>
         <span className="text-muted/70">
           题目整理自公开面经，详情保留原帖链接；AI 答案仅供参考。
         </span>

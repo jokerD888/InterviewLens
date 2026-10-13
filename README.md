@@ -1,4 +1,12 @@
-# InterviewLens
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/wordmark-dark.svg">
+    <img src="web/public/brand/wordmark-light.svg" alt="InterviewLens" width="480" height="120">
+  </picture>
+</h1>
+
+<p align="center">面经档案馆 · 公司与岗位浏览 · 语义检索</p>
+<p align="center"><a href="https://interview.819266.xyz/">在线体验</a> · <a href="docs/BRAND.md">Logo 与品牌资源</a></p>
 
 InterviewLens 是一个面向个人秋招准备的面经知识库：把牛客等来源的非结构化面经抓取下来，抽取为公司、岗位、面试轮次和问题，统一实体名称，建立可检索的数据层，再生成公司 × 岗位 × 时间段的面试重点摘要。
 
