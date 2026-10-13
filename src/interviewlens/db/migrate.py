@@ -21,6 +21,12 @@ LEDGER = """CREATE TABLE IF NOT EXISTS il_schema_migrations (
 )"""
 
 
+def checksum(path: Path) -> str:
+    # Git checkouts on Windows can use CRLF while Linux uses LF. Hash the
+    # canonical UTF-8 SQL text, so restoring a Windows ledger on Linux works.
+    return hashlib.sha256(path.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+
+
 def migrations(directory: Path):
     files = sorted(directory.glob("[0-9][0-9][0-9]_*.sql"))
     if not files:
@@ -66,7 +72,7 @@ def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None 
             applied = dict(rows)
             for path in files:
                 version = int(path.name[:3])
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                digest = checksum(path)
                 if version in applied and applied[version] != digest:
                     raise RuntimeError(f"Migration checksum changed: {path.name}")
             if set(applied) - {int(path.name[:3]) for path in files}:
@@ -84,7 +90,7 @@ def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None 
                 verify_current(conn)
                 with conn.transaction():
                     for path in files:
-                        conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256,baseline) VALUES (%s,%s,%s,true)", (int(path.name[:3]), path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+                        conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256,baseline) VALUES (%s,%s,%s,true)", (int(path.name[:3]), path.name, checksum(path)))
                 print("Recorded explicitly verified legacy schema 013 baseline")
                 return
             if not applied and conn.execute("SELECT to_regclass('public.posts')").fetchone()[0]:
@@ -95,7 +101,7 @@ def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None 
                     continue
                 with conn.transaction():
                     conn.execute(transaction_body(path.read_text(encoding="utf-8")), prepare=False)
-                    conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256) VALUES (%s,%s,%s)", (version, path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+                    conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256) VALUES (%s,%s,%s)", (version, path.name, checksum(path)))
                 print(f"Applied {path.name}")
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (LOCK_ID,))
