@@ -26,18 +26,18 @@ except Exception:  # noqa: BLE001  # ponytail: import-guard, broad by design
 
 # ----------------------------------------------------------------- Langfuse
 
-_langfuse_client: "Langfuse | None" = None
+_langfuse_client: Any | None = None
 _langfuse_init_failed: bool = False
 
 
-def get_langfuse() -> "Langfuse | None":
+def get_langfuse() -> Any | None:
     """Lazy singleton. Returns None when SDK missing or keys are placeholder."""
     global _langfuse_client, _langfuse_init_failed
     if _langfuse_client is not None:
         return _langfuse_client
     if _langfuse_init_failed:
         return None
-    if Langfuse is None:
+    if Langfuse is None and settings.langfuse_transport != "legacy":
         _langfuse_init_failed = True
         return None
     pk = settings.langfuse_public_key
@@ -46,11 +46,17 @@ def get_langfuse() -> "Langfuse | None":
         _langfuse_init_failed = True
         return None
     try:
-        _langfuse_client = Langfuse(
+        from .tracing import LegacyClient, OTelClient
+
+        if settings.langfuse_transport == "legacy":
+            _langfuse_client = LegacyClient(host=settings.langfuse_host, public_key=pk, secret_key=sk)
+            return _langfuse_client
+        client = Langfuse(
             public_key=pk,
             secret_key=sk,
             host=settings.langfuse_host,
         )
+        _langfuse_client = client if hasattr(client, "trace") else OTelClient(client)
         return _langfuse_client
     except Exception:  # noqa: BLE001  # ponytail: broad catch ok — observability must not break the pipeline
         log.warning("langfuse.init_failed", exc_info=True)

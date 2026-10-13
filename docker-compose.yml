@@ -118,6 +118,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_TRANSPORT: ${LANGFUSE_TRANSPORT:-legacy}
       HF_HOME: /app/.cache/huggingface
     volumes:
       - il_hf_cache:/app/.cache/huggingface
@@ -158,6 +159,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_TRANSPORT: ${LANGFUSE_TRANSPORT:-legacy}
       HF_HOME: /app/.cache/huggingface
     volumes:
       - il_hf_cache:/app/.cache/huggingface

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +61,8 @@ class Settings(BaseSettings):
     langfuse_host: str = "http://localhost:3001"
     langfuse_public_key: str = "pk-REPLACE_ME"
     langfuse_secret_key: str = "sk-REPLACE_ME"
+    # Legacy REST is only for existing self-hosted Langfuse v2 servers.
+    langfuse_transport: Literal["otel", "legacy"] = "otel"
 
     # ---- Nowcoder ----
     nowcoder_cookie: str = ""

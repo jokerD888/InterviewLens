@@ -88,101 +88,117 @@ async def call_tool(
             trace = lf.trace(name=trace_name or "extract", metadata=trace_metadata or {})
             own_trace = True
 
-    attempt_idx = 0
-    async for attempt in AsyncRetrying(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(min=2, max=15),
-        retry=retry_if_exception_type(
-            (
-                APIConnectionError,
-                APITimeoutError,
-                RateLimitError,
-                InternalServerError,
-                ToolOutputError,
-            )
-        ),
-        reraise=True,
-    ):
-        with attempt:
-            attempt_idx += 1
-            local_temp = temperature if attempt_idx == 1 else 0.0
-            log.info(
-                "llm.call",
-                model=model,
-                attempt=attempt_idx,
-                temperature=local_temp,
-                msg_count=len(messages),
-            )
-            generation = None
-            if trace is not None:
-                with swallow("langfuse.gen_create_failed", attempt=attempt_idx):  # Layer A
-                    generation = trace.generation(
-                        name="deepseek.tool_call",
-                        model=model,
-                        input=messages,
-                        metadata={"attempt": attempt_idx, "temperature": local_temp},
-                    )
+    try:
+        attempt_idx = 0
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(min=2, max=15),
+            retry=retry_if_exception_type(
+                (
+                    APIConnectionError,
+                    APITimeoutError,
+                    RateLimitError,
+                    InternalServerError,
+                    ToolOutputError,
+                )
+            ),
+            reraise=True,
+        ):
+            with attempt:
+                attempt_idx += 1
+                local_temp = temperature if attempt_idx == 1 else 0.0
+                log.info(
+                    "llm.call",
+                    model=model,
+                    attempt=attempt_idx,
+                    temperature=local_temp,
+                    msg_count=len(messages),
+                )
+                generation = None
+                if trace is not None:
+                    with swallow("langfuse.gen_create_failed", attempt=attempt_idx):  # Layer A
+                        generation = trace.generation(
+                            name="deepseek.tool_call",
+                            model=model,
+                            input=messages,
+                            metadata={"attempt": attempt_idx, "temperature": local_temp},
+                        )
 
-            resp: ChatCompletion = await client.chat.completions.create(
-                model=model,
-                messages=messages,  # type: ignore[arg-type]
-                tools=tools,  # type: ignore[arg-type]
-                tool_choice=tool_choice,  # type: ignore[arg-type]
-                temperature=local_temp,
-                max_tokens=max_tokens,
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-
-            choice = resp.choices[0]
-            tool_calls = choice.message.tool_calls or []
-            if not tool_calls:
-                if generation:
-                    with swallow("langfuse.gen_end_failed"):  # Layer A
-                        generation.end(level="ERROR", status_message="no tool call")
-                raise ToolOutputError("LLM returned no tool call")
-            tc = tool_calls[0]
-            raw_args = tc.function.arguments
-            try:
-                args = json.loads(raw_args)
-            except json.JSONDecodeError:
                 try:
-                    from json_repair import repair_json
+                    resp: ChatCompletion = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,  # type: ignore[arg-type]
+                        tools=tools,  # type: ignore[arg-type]
+                        tool_choice=tool_choice,  # type: ignore[arg-type]
+                        temperature=local_temp,
+                        max_tokens=max_tokens,
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
+                except BaseException as exc:
+                    if generation is not None:
+                        with swallow("langfuse.gen_end_failed"):
+                            generation.end(level="ERROR", status_message=type(exc).__name__)
+                    raise
 
-                    args = json.loads(repair_json(raw_args))
-                    log.info("llm.json_repaired")
-                except Exception as exc:  # noqa: BLE001  # ponytail: repair_json failure type is unpredictable, broad catch intentional
-                    log.warning("llm.json_repair_failed", exc_info=True)
+                choice = resp.choices[0]
+                tool_calls = choice.message.tool_calls or []
+                if not tool_calls:
                     if generation:
                         with swallow("langfuse.gen_end_failed"):  # Layer A
-                            generation.end(
-                                level="ERROR",
-                                status_message=f"JSONDecodeError: {exc}",
-                                output=raw_args,
-                            )
-                    raise ToolOutputError(f"Invalid JSON in tool args: {exc}") from exc
+                            generation.end(level="ERROR", status_message="no tool call")
+                    raise ToolOutputError("LLM returned no tool call")
+                tc = tool_calls[0]
+                raw_args = tc.function.arguments
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    try:
+                        from json_repair import repair_json
 
-            usage = resp.usage.model_dump() if resp.usage else None
-            if generation:
-                with swallow("langfuse.gen_end_failed"):  # Layer A
-                    generation.end(output=args, usage=usage)
-            if own_trace and trace is not None:
-                with swallow("langfuse.trace_update_failed"):  # Layer A
-                    trace.update(output=args)
-            log.info(
-                "llm.done",
-                tool=tc.function.name,
-                usage=usage,
-                attempts=attempt_idx,
-            )
-            return ToolCallResult(
-                name=tc.function.name,
-                arguments=args,
-                raw_response=resp.model_dump(),
-                usage=usage,
-                model=model,
-            )
+                        args = json.loads(repair_json(raw_args))
+                        log.info("llm.json_repaired")
+                    except Exception as exc:  # noqa: BLE001  # ponytail: repair_json failure type is unpredictable, broad catch intentional
+                        log.warning("llm.json_repair_failed", exc_info=True)
+                        if generation:
+                            with swallow("langfuse.gen_end_failed"):  # Layer A
+                                generation.end(
+                                    level="ERROR",
+                                    status_message=f"JSONDecodeError: {exc}",
+                                    output=raw_args,
+                                )
+                        raise ToolOutputError(f"Invalid JSON in tool args: {exc}") from exc
 
-    raise RuntimeError("unreachable")
+                usage = resp.usage.model_dump() if resp.usage else None
+                if generation:
+                    with swallow("langfuse.gen_end_failed"):  # Layer A
+                        generation.end(output=args, usage=usage)
+                if own_trace and trace is not None:
+                    with swallow("langfuse.trace_update_failed"):  # Layer A
+                        trace.update(output=args)
+                log.info(
+                    "llm.done",
+                    tool=tc.function.name,
+                    usage=usage,
+                    attempts=attempt_idx,
+                )
+                return ToolCallResult(
+                    name=tc.function.name,
+                    arguments=args,
+                    raw_response=resp.model_dump(),
+                    usage=usage,
+                    model=model,
+                )
+
+        raise RuntimeError("unreachable")
+    finally:
+        if own_trace:
+            from ..tracing import end_trace
+            with swallow("langfuse.trace_end_failed"):
+                end_trace(trace)
+            if lf is not None:
+                import asyncio
+                with swallow("langfuse.flush_failed"):
+                    await asyncio.to_thread(lf.flush)
 
 
 async def aclose() -> None:

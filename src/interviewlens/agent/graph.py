@@ -217,4 +217,7 @@ async def run_pipeline(
             try:
                 await processing.release(owner)
             finally:
+                from ..tracing import end_trace
+                with swallow("graph.trace_end_failed"):
+                    end_trace(trace)
                 await asyncio.to_thread(langfuse_flush)

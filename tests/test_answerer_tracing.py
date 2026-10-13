@@ -46,6 +46,8 @@ async def test_automatic_trace_records_output_usage_and_flushes(dependencies):
         usage={"prompt_tokens": 10, "completion_tokens": 20},
     )
     lf.flush.assert_called_once()
+    lf.trace.return_value.update.assert_called_once_with(output="new answer")
+    lf.trace.return_value.end.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -113,3 +115,17 @@ async def test_truncated_answer_is_not_cached_as_complete(dependencies):
         status_message="Truncated answer",
     )
     ans.cache_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_budget_failure_ends_trace_without_swallowing_limit(dependencies):
+    from interviewlens.llm.budget import LLMLimitError
+    lf, create = dependencies
+    create.side_effect = LLMLimitError("budget exhausted")
+    with pytest.raises(LLMLimitError):
+        await ans.generate_one(content="question", category=None)
+    lf.trace.return_value.generation.return_value.end.assert_called_once_with(
+        level="ERROR", status_message="LLMLimitError",
+    )
+    lf.trace.return_value.end.assert_called_once()
+    lf.flush.assert_called_once()

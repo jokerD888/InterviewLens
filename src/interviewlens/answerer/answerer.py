@@ -57,6 +57,7 @@ async def generate_one(*, content: str, category: str | None, trace=None, use_ca
             if own_client is not None:
                 trace = own_client.trace(
                     name="answerer",
+                    input={"content": content, "category": category},
                     metadata={
                         "prompt_version": settings.answer_prompt_version,
                     },
@@ -68,49 +69,58 @@ async def generate_one(*, content: str, category: str | None, trace=None, use_ca
                 input=messages,
             )
     try:
-        client = get_client()
-        resp = await client.chat.completions.create(
-            model=settings.deepseek_model_chat,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=0.3,
-            max_tokens=MAX_TOKENS,
-            extra_body={"thinking": {"type": "disabled"}},
-        )
-    except (openai.APIError, TimeoutError) as exc:
-        # Layer C: external LLM failure degrades to None; logic bugs bubble.
-        log.error("answer.llm_failed", exc_info=True)
+        try:
+            client = get_client()
+            resp = await client.chat.completions.create(
+                model=settings.deepseek_model_chat,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0.3,
+                max_tokens=MAX_TOKENS,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+        except (openai.APIError, TimeoutError) as exc:
+            # Layer C: external LLM failure degrades to None; logic bugs bubble.
+            log.error("answer.llm_failed", exc_info=True)
+            if generation is not None:
+                with swallow("answer.trace_record_failed"):
+                    generation.end(level="ERROR", status_message=type(exc).__name__)
+            return None
+
+        answer = (resp.choices[0].message.content or "").strip()
+        truncated = getattr(resp.choices[0], "finish_reason", None) == "length"
+        if truncated:
+            log.warning("answer.truncated", max_tokens=MAX_TOKENS)
+            answer = ""
+        usage = resp.usage.model_dump() if resp.usage else None
+        if generation is not None:
+            with swallow("answer.trace_record_failed"):  # Layer A
+                if answer:
+                    generation.end(output=answer, usage=usage)
+                else:
+                    generation.end(
+                        output=answer,
+                        usage=usage,
+                        level="ERROR",
+                        status_message="Truncated answer" if truncated else "Empty answer",
+                    )
+        if own_client is not None and trace is not None:
+            with swallow("answer.trace_record_failed"):
+                trace.update(output=answer)
+
+        if answer:
+            await cache_set(key, {"answer": answer})
+        return answer or None
+    except BaseException as exc:
         if generation is not None:
             with swallow("answer.trace_record_failed"):
                 generation.end(level="ERROR", status_message=type(exc).__name__)
+        raise
+    finally:
         if own_client is not None:
             with swallow("answer.trace_flush_failed"):
+                from ..tracing import end_trace
+                end_trace(trace)
                 await asyncio.to_thread(own_client.flush)
-        return None
-
-    answer = (resp.choices[0].message.content or "").strip()
-    truncated = getattr(resp.choices[0], "finish_reason", None) == "length"
-    if truncated:
-        log.warning("answer.truncated", max_tokens=MAX_TOKENS)
-        answer = ""
-    usage = resp.usage.model_dump() if resp.usage else None
-    if generation is not None:
-        with swallow("answer.trace_record_failed"):  # Layer A
-            if answer:
-                generation.end(output=answer, usage=usage)
-            else:
-                generation.end(
-                    output=answer,
-                    usage=usage,
-                    level="ERROR",
-                    status_message="Truncated answer" if truncated else "Empty answer",
-                )
-    if own_client is not None:
-        with swallow("answer.trace_flush_failed"):
-            await asyncio.to_thread(own_client.flush)
-
-    if answer:
-        await cache_set(key, {"answer": answer})
-    return answer or None
 
 
 async def _fetch_targets(
