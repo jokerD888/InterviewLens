@@ -43,3 +43,9 @@ async def test_company_positions_datetime_survives_cache_roundtrip(monkeypatch, 
     assert second[0].latest_posted_at == latest
     session.execute.assert_awaited_once()
     redis.set.assert_awaited_once()
+
+
+@pytest.fixture(autouse=True)
+def fake_database_revision(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("interviewlens.api.cache.read_revision", AsyncMock(return_value=""))

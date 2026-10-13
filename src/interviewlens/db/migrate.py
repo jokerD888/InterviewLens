@@ -61,7 +61,7 @@ def verify_current(conn):
         raise RuntimeError("Baseline refused: pgvector missing")
 
 
-def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None = None):
+def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None = None, baseline_version: int = 13):
     files = migrations(directory)
     url = (dsn or settings.database_url_sync).replace("postgresql+psycopg://", "postgresql://", 1)
     with psycopg.connect(url, autocommit=True) as conn:
@@ -85,11 +85,11 @@ def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None 
             if action == "baseline":
                 if applied:
                     raise RuntimeError("Baseline refused: ledger is not empty")
-                if len(files) != 13:
+                if baseline_version != 13 or len(files) < 13:
                     raise RuntimeError("Legacy baseline supports schema 013 only; migrate newer versions normally")
                 verify_current(conn)
                 with conn.transaction():
-                    for path in files:
+                    for path in files[:baseline_version]:
                         conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256,baseline) VALUES (%s,%s,%s,true)", (int(path.name[:3]), path.name, checksum(path)))
                 print("Recorded explicitly verified legacy schema 013 baseline")
                 return
@@ -102,6 +102,10 @@ def run(action: str, directory: Path = PROJECT_ROOT / "sql", *, dsn: str | None 
                 with conn.transaction():
                     conn.execute(transaction_body(path.read_text(encoding="utf-8")), prepare=False)
                     conn.execute("INSERT INTO il_schema_migrations(version,filename,sha256) VALUES (%s,%s,%s)", (version, path.name, checksum(path)))
+                    # Do not grant API access to migration metadata via defaults.
+                    if conn.execute("SELECT 1 FROM pg_roles WHERE rolname='il_app'").fetchone():
+                        from .provision import protect_metadata
+                        protect_metadata(conn)
                 print(f"Applied {path.name}")
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (LOCK_ID,))

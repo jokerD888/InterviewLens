@@ -16,10 +16,11 @@ import re
 import subprocess
 import uuid
 from private_files import private_directory, private_file
+from urllib.parse import urlsplit
 
 
 def invoke(command, **kwargs):
-    result = subprocess.run(command, capture_output=True, **kwargs)
+    result = subprocess.run(command, capture_output=True, timeout=kwargs.pop("timeout", 900), **kwargs)
     if result.returncode:
         raise RuntimeError("Operation failed; command output withheld because it may include credentials")
     return result.stdout
@@ -41,12 +42,16 @@ class Database:
     def __init__(self, root: Path, container: str | None = None, distro: str | None = None):
         self.docker = ["wsl", "-d", distro, "-u", "root", "--", "docker"] if distro else ["docker"]
         self.wsl = bool(distro)
+        self.configured_database = None
         if container:
             if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,80}", container):
                 raise ValueError("Invalid container name")
             value = invoke(self.docker + ["inspect", "--format", "{{.Id}}", container], text=True).strip()
         else:
             prefix = self.docker + compose(root)[1:]
+            configuration = json.loads(invoke(prefix + ["config", "--format", "json"], text=True))
+            url = configuration["services"]["api"]["environment"]["DATABASE_URL"]
+            self.configured_database = urlsplit(url).path.lstrip("/")
             value = invoke(prefix + ["ps", "-q", "postgres"], text=True).strip()
         if not re.fullmatch(r"[0-9a-f]{12,64}", value):
             raise RuntimeError("PostgreSQL container must be running")
@@ -77,7 +82,11 @@ def counts(base: Database, database: str):
     return json.loads(raw.strip())
 
 
-def backup(base: Database, destination: Path):
+def backup(base: Database, destination: Path, database: str):
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}", database):
+        raise ValueError("Invalid backup database")
+    if base.configured_database and database != base.configured_database:
+        raise ValueError("Backup database differs from the application target")
     if destination in (Path(destination.anchor), Path.home(), Path.cwd(), Path(__file__).resolve().parents[1]):
         raise ValueError("Use a dedicated backup subdirectory")
     destination.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -85,26 +94,28 @@ def backup(base: Database, destination: Path):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     target = destination / f"interviewlens-{stamp}.dump"
     remote = f"/tmp/interviewlens-{stamp}.dump"
-    before = counts(base, "interviewlens")
+    before = counts(base, database)
     container = base.container
     if not re.fullmatch(r"[0-9a-f]{12,64}", container):
         raise RuntimeError("PostgreSQL service must be running")
     try:
-        base.exec("pg_dump", "-U", "il", "-d", "interviewlens", "-Fc", "--no-owner", "--no-acl", "-f", remote)
+        base.exec("pg_dump", "-U", "il", "-d", database, "-Fc", "--no-owner", "--no-acl", "-f", remote)
         base.exec("pg_restore", "--list", remote)
         base.cp(f"{container}:{remote}", str(target))
     finally:
         base.exec("rm", "-f", remote)
     private_file(target)
     digest = file_sha256(target)
-    after = counts(base, "interviewlens")
+    after = counts(base, database)
     manifest = {"created_utc": stamp, "file": target.name, "sha256": digest,
-                "before": before, "after": after, "counts_stable": before == after}
+                "database": database, "before": before, "after": after, "counts_stable": before == after}
     sidecar = target.with_suffix(".json")
     sidecar.touch(mode=0o600, exist_ok=False)
     private_file(sidecar)
     sidecar.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps({"backup": str(target), "counts_stable": before == after}))
+    if before != after:
+        raise RuntimeError("Backup retained but verification failed: pause writes and retry")
 
 
 def restore(base: Database, source: Path, database: str):
@@ -124,8 +135,50 @@ def restore(base: Database, source: Path, database: str):
         if metadata["counts_stable"] and restored != metadata["after"]:
             raise RuntimeError("Restored counts do not match stable source snapshot")
         print(json.dumps({"restored_database": database, "counts": restored, "verified": metadata["counts_stable"]}))
+        if metadata["counts_stable"]:
+            metadata["restore_verified_at"] = datetime.now(timezone.utc).isoformat()
+            private_file(source.with_suffix(".json"))
+            source.with_suffix(".json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     finally:
         base.exec("rm", "-f", remote)
+
+
+def retention(directory: Path, keep_days: int = 14, apply: bool = False):
+    """Only generated backup pairs; dry-run by default; keep 3 verified dumps.
+
+    Never remove symlinks, paths outside the dedicated directory, recent files,
+    or the newest backup. Nothing is pruned before 3 restore drills exist.
+    """
+    if keep_days < 14 or directory in (Path(directory.anchor), Path.home(), Path.cwd()):
+        raise ValueError("Dedicated directory and at least 14 days are required")
+    entries=[]
+    for dump in directory.glob('interviewlens-*.dump'):
+        sidecar=dump.with_suffix('.json')
+        if dump.is_symlink() or sidecar.is_symlink() or not sidecar.is_file():
+            continue
+        if dump.resolve().parent != directory or sidecar.resolve().parent != directory:
+            raise ValueError('Backup path escapes the dedicated directory')
+        if not re.fullmatch(r'interviewlens-\d{8}T\d{6}Z-[0-9a-f]{6}\.dump',dump.name):
+            continue
+        try:
+            metadata=json.loads(sidecar.read_text(encoding='utf-8'))
+        except (ValueError,OSError):
+            continue
+        entries.append((dump.stat().st_mtime,dump,sidecar,metadata.get('restore_verified_at')))
+    entries.sort(key=lambda entry:entry[0],reverse=True)
+    verified=[entry for entry in entries if entry[3]]
+    if len(verified)<3:
+        print(json.dumps({'pruned':0,'reason':'keep all until three verified restores exist'}))
+        return
+    protected={entry[1] for entry in verified[:3]}
+    protected.add(entries[0][1])
+    cutoff=datetime.now(timezone.utc).timestamp()-keep_days*86400
+    candidates=[entry for entry in entries if entry[0]<cutoff and entry[1] not in protected]
+    for _,dump,sidecar,_ in candidates:
+        if apply:
+            # Resolved paths were verified above; no recursive deletion.
+            dump.unlink(); sidecar.unlink()
+    print(json.dumps({'candidates':len(candidates),'pruned':len(candidates) if apply else 0,'dry_run':not apply}))
 
 
 if __name__ == "__main__":
@@ -136,14 +189,25 @@ if __name__ == "__main__":
     commands = parser.add_subparsers(dest="action", required=True)
     b = commands.add_parser("backup")
     b.add_argument("--directory", type=Path, required=True)
+    b.add_argument("--database", help="Defaults to the configured API target; required with --container")
     r = commands.add_parser("restore")
     r.add_argument("--file", type=Path, required=True)
     r.add_argument("--database", required=True)
+    p = commands.add_parser("prune")
+    p.add_argument("--directory", type=Path, required=True)
+    p.add_argument("--keep-days", type=int, default=14)
+    p.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     try:
+        if args.action == 'prune':
+            retention(args.directory.resolve(),args.keep_days,args.apply)
+            raise SystemExit(0)
         base = Database(args.deploy_root.resolve(), args.container, args.wsl_distro)
         if args.action == "backup":
-            backup(base, args.directory.resolve())
+            database = args.database or base.configured_database
+            if not database:
+                raise ValueError("Explicit --database is required with --container")
+            backup(base, args.directory.resolve(), database)
         else:
             restore(base, args.file.resolve(), args.database)
     except Exception as error:

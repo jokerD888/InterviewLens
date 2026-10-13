@@ -95,7 +95,8 @@ def _patch(monkeypatch, fake_redis, embed_calls=None):
 
     async def _fake_embed(texts):
         call_count["n"] += 1
-        return np.array([[0.1, 0.2, 0.3]], dtype=np.float32)
+        vector = np.array([[0.1, 0.2, 0.3]], dtype=np.float32)
+        return vector / np.linalg.norm(vector)
 
     monkeypatch.setattr(rs, "embed_texts", _fake_embed)
     return call_count
@@ -134,6 +135,7 @@ async def test_embed_cache_hit_skips_embed_texts(monkeypatch):
     # pre-seed embedding cache
     ekey = rs._embed_key("JVM GC")
     vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    vec /= np.linalg.norm(vec)
     fake.store[ekey] = base64.b64encode(vec.tobytes()).decode("ascii")
 
     s1 = _FakeSession([_row(1)])
@@ -186,3 +188,10 @@ async def test_cache_disabled_skips_redis(monkeypatch):
     assert cc["n"] == 1
     assert session.calls == 1
     assert fake.store == {}      # nothing written to cache
+
+
+@pytest.fixture(autouse=True)
+def fake_database_revision(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("interviewlens.api.cache.read_revision", AsyncMock(return_value=""))
+    monkeypatch.setattr(rs.settings, "embedding_dim", 3)

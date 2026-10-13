@@ -57,7 +57,7 @@ async def generate_answers(req: BridgeGenerateRequest) -> BridgeGenerateResponse
         )
         if not answer:
             try:
-                answer = await generate_one(content=q["content"], category=q["category"])
+                answer = await generate_one(content=q["content"], category=q["category"], use_cache=not req.regenerate)
             except LLMLimitError as exc:
                 raise HTTPException(429, str(exc)) from exc
         if answer is None:

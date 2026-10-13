@@ -65,12 +65,22 @@ def jobs() -> JobsOut:
 
     from ..tasks import celery_app
 
-    r = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    r = redis.Redis.from_url(settings.redis_url, decode_responses=True,
+                             socket_connect_timeout=2, socket_timeout=2)
+    broker = redis.Redis.from_url(settings.celery_broker_url, decode_responses=True,
+                                 socket_connect_timeout=2, socket_timeout=2)
 
     queues: dict[str, int] = {}
     with swallow("admin.jobs.queue_len_failed"):  # Layer D
         # Default Celery queue name when no routing is configured
-        queues["celery"] = int(r.llen("celery") or 0)
+        queue_names = {celery_app.conf.task_default_queue or "celery"}
+        queue_names.update(queue.name for queue in (celery_app.conf.task_queues or []))
+        for name in sorted(queue_names):
+            # Kombu Redis priorities use several lists for one logical queue.
+            priorities = celery_app.conf.broker_transport_options.get("priority_steps", [0, 3, 6, 9])
+            separator = celery_app.conf.broker_transport_options.get("sep", "\x06\x16")
+            queues[name] = sum(int(broker.llen(name if priority == 0 else f"{name}{separator}{priority}") or 0)
+                               for priority in priorities)
 
     dlq: dict[str, int] = {}
     with swallow("admin.jobs.dlq_scan_failed"):  # Layer D
@@ -83,6 +93,8 @@ def jobs() -> JobsOut:
         active = insp.active() or {}
         workers = list(active.keys())
 
+    r.close()
+    broker.close()
     return JobsOut(queues=queues, dlq=dlq, workers=workers)
 
 

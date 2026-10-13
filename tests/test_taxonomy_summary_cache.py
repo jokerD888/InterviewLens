@@ -218,3 +218,9 @@ async def test_summary_404_not_cached(monkeypatch):
         await summ.get_summary(company="x", position="y", period="all", session=session)
 
     assert fake.store == {}
+
+
+@pytest.fixture(autouse=True)
+def fake_database_revision(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("interviewlens.api.cache.read_revision", AsyncMock(return_value=""))

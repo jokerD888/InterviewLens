@@ -1,0 +1,10 @@
+[Unit]
+Description=Check InterviewLens every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=interviewlens-monitor.service
+
+[Install]
+WantedBy=timers.target

@@ -1,18 +1,36 @@
 name: interviewlens-production
 
+x-logging: &logging
+  driver: local
+  options: {max-size: "10m", max-file: "5"}
+
 x-app: &app
   image: ${APP_IMAGE:?Set a versioned APP_IMAGE}
   build:
     context: ..
+    target: api
   restart: unless-stopped
   init: true
   security_opt: [no-new-privileges:true]
   cap_drop: [ALL]
-  env_file: .env.production
+  logging: *logging
   environment: &app-env
     APP_ENV: production
-    DATABASE_URL: postgresql+asyncpg://il:${POSTGRES_PASSWORD:?Required}@postgres:5432/interviewlens
-    DATABASE_URL_SYNC: postgresql+psycopg://il:${POSTGRES_PASSWORD:?Required}@postgres:5432/interviewlens
+    DATABASE_URL: postgresql+asyncpg://il_app:${APP_DB_PASSWORD:?Required}@postgres:5432/${DATABASE_NAME:-interviewlens}
+    DATABASE_URL_SYNC: postgresql+psycopg://il_app:${APP_DB_PASSWORD:?Required}@postgres:5432/${DATABASE_NAME:-interviewlens}
+    ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Required}
+    DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-sk-REPLACE_ME}
+    DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+    DEEPSEEK_MODEL_CHAT: ${DEEPSEEK_MODEL_CHAT:-deepseek-chat}
+    DEEPSEEK_MODEL_REASONER: ${DEEPSEEK_MODEL_REASONER:-deepseek-reasoner}
+    LLM_CONCURRENCY: ${LLM_CONCURRENCY:-4}
+    LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-30}
+    LLM_DAILY_TOKEN_BUDGET: ${LLM_DAILY_TOKEN_BUDGET:-2000000}
+    LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-REPLACE_ME}
+    LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-REPLACE_ME}
+    LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
+    DAILY_PREP_API_URL: ${DAILY_PREP_API_URL:-}
+    DAILY_PREP_TOKEN: ${DAILY_PREP_TOKEN:-}
     REDIS_URL: redis://:${REDIS_PASSWORD:?Required}@redis:6379/0
     CACHE_REDIS_URL: redis://:${REDIS_CACHE_PASSWORD:?Required}@redis-cache:6379/0
     CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?Required}@redis:6379/1
@@ -20,6 +38,9 @@ x-app: &app
     APP_ORIGINS: '["https://${PUBLIC_DOMAIN:?Required}"]'
     HF_HOME: /models
     EMBEDDING_DEVICE: cpu
+    OMP_NUM_THREADS: "2"
+    MKL_NUM_THREADS: "2"
+    TOKENIZERS_PARALLELISM: "false"
     INFERPILOT_SERVER_URL: ""
   volumes: [models:/models]
   networks: [app, data]
@@ -30,21 +51,23 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: il
-      POSTGRES_DB: interviewlens
+      POSTGRES_DB: ${DATABASE_NAME:-interviewlens}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Required}
     volumes: [postgres:/var/lib/postgresql/data]
     networks: [data]
     mem_limit: 2g
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U il -d interviewlens"]
+      test: [CMD-SHELL, "pg_isready -U il -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *logging
     user: redis
     command: [redis-server, /etc/redis/redis.conf]
     volumes:
@@ -63,6 +86,7 @@ services:
   redis-cache:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *logging
     user: redis
     command: [redis-server, /etc/redis/redis.conf]
     volumes:
@@ -77,12 +101,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  provision:
+    <<: *app
+    restart: "no"
+    command: [python, -m, interviewlens.db.provision]
+    environment:
+      BOOTSTRAP_DATABASE_URL: postgresql://il:${POSTGRES_PASSWORD:?Required}@postgres:5432/${DATABASE_NAME:-interviewlens}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Required}
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?Required}
+    depends_on:
+      postgres: {condition: service_healthy}
   migrate:
     <<: *app
     restart: "no"
     command: [python, -m, interviewlens.db.migrate, apply]
+    environment:
+      <<: *app-env
+      DATABASE_URL_SYNC: postgresql+psycopg://il_migrate:${MIGRATION_DB_PASSWORD:?Required}@postgres:5432/${DATABASE_NAME:-interviewlens}
     depends_on:
-      postgres: {condition: service_healthy}
+      provision: {condition: service_completed_successfully}
   api:
     <<: *app
     # One API process: bounded in-process inference, shared Redis IP quotas.
@@ -90,13 +127,13 @@ services:
     environment:
       <<: *app-env
       HF_HUB_OFFLINE: "1"
-      TRUSTED_SEARCH_PROXY: "caddy"
+      TRUSTED_SEARCH_PROXY: "caddy,web"
     depends_on:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
     healthcheck:
-      test: [CMD, curl, -fsS, http://localhost:8000/]
+      test: [CMD, curl, -fsS, http://localhost:8000/health/ready]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -111,6 +148,8 @@ services:
       HF_HUB_OFFLINE: "0"
   worker:
     <<: *app
+    image: ${WORKER_IMAGE:?Set a versioned WORKER_IMAGE}
+    build: {context: .., target: worker}
     profiles: [processing]
     command: [celery, -A, interviewlens.tasks.celery_app, worker, --loglevel=INFO, --concurrency=1]
     depends_on:
@@ -119,10 +158,14 @@ services:
     environment:
       <<: *app-env
       LANGFUSE_HOST: http://langfuse:3000
+      NOWCODER_COOKIE: ${NOWCODER_COOKIE:-}
+      HF_HUB_OFFLINE: "1"
+    stop_grace_period: 310s
   langfuse-db:
     image: postgres:16-alpine
     profiles: [observability]
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: langfuse
       POSTGRES_DB: langfuse
@@ -138,6 +181,7 @@ services:
     image: langfuse/langfuse:2
     profiles: [observability]
     restart: unless-stopped
+    logging: *logging
     environment:
       DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?Required}@langfuse-db:5432/langfuse
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?Required}
@@ -155,6 +199,7 @@ services:
       context: ../web
       args: {NEXT_PUBLIC_API_BASE: "http://api:8000"}
     restart: unless-stopped
+    logging: *logging
     init: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -174,6 +219,7 @@ services:
   caddy:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
+    logging: *logging
     ports: ["80:80", "443:443"]
     environment:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Required}

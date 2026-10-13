@@ -33,6 +33,8 @@
         # No backend compatibility routes bypass the /api gate.
         @direct path /bridge /bridge/* /summaries /summaries/* /docs /redoc /openapi.json
         respond @direct "Not found" 404
-        reverse_proxy web:3000
+        reverse_proxy web:3000 {
+            header_up X-IL-Client-IP {remote_host}
+        }
     }
 }

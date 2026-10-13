@@ -5,6 +5,8 @@ import { ExternalLink, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { AnswerBlock } from "@/components/answer-block";
 import type { PostFeedItem } from "@/lib/api";
+import { fetcher, type FeedQuestion } from "@/lib/api";
+import useSWRInfinite from "swr/infinite";
 
 type Props = {
   post: PostFeedItem;
@@ -12,6 +14,12 @@ type Props = {
 
 export function FeedCard({ post }: Props) {
   const [open, setOpen] = useState(false);
+  const { data, error, size, setSize, isValidating } = useSWRInfinite<FeedQuestion[]>(
+    (page, previous) => !open || (previous && previous.length < 50)
+      ? null : `/posts/${post.id}/questions?limit=50&offset=${page * 50}`,
+    fetcher,
+  );
+  const questions = data?.flat() ?? [];
   const when = post.posted_at ? fmtDate(post.posted_at) : null;
 
   return (
@@ -89,13 +97,15 @@ export function FeedCard({ post }: Props) {
 
               </section>
             ))}
-            {post.questions.length > 0 && (
+            {error && <p role="alert" className="text-sm text-muted">题目加载失败，请收起后重新展开。</p>}
+            {!data && !error && <p className="text-sm text-muted">正在加载题目…</p>}
+            {questions.length > 0 && (
               <section>
                 <h4 className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted">
                   ¶ 面试问题 ({post.question_count})
                 </h4>
                 <ol className="space-y-4">
-                  {post.questions.map((q) => (
+                  {questions.map((q) => (
                     <li key={q.id} className="border-l-2 border-border pl-3">
                       <div className="flex items-center gap-2 mb-1">
                         {q.round_type && (
@@ -124,6 +134,11 @@ export function FeedCard({ post }: Props) {
                     </li>
                   ))}
                 </ol>
+                {questions.length < post.question_count && !error && (
+                  <button disabled={isValidating} onClick={() => setSize(size + 1)} className="mt-3 text-sm text-muted hover:text-accent">
+                    {isValidating ? "正在加载…" : "加载更多题目"}
+                  </button>
+                )}
               </section>
             )}
 

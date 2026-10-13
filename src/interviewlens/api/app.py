@@ -22,15 +22,18 @@ from .routes_search import router as search_router
 from .routes_summary import router as summary_router
 from .routes_taxonomy import router as taxonomy_router
 from .resource_guard import PublicResourceGuard
+from .routes_health import router as health_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm bge-m3 in the background so first /posts/search isn't slow
+    app.state.embedding_ready = False
+    # Warm once at startup; probes inspect the state instead of encoding again.
     try:
         from ..embedding import get_model
 
         await get_model()
+        app.state.embedding_ready = True
         log.info("api.embedding_warmed")
     except Exception:  # noqa: BLE001  # ponytail: startup must not abort on model load; broad catch intentional
         log.warning("api.embedding_warm_failed", exc_info=True)
@@ -71,6 +74,7 @@ app.include_router(summary_router)
 app.include_router(bridge_router)
 app.include_router(bridge_router, prefix="/api")  # backward-compatible alias for direct callers
 app.include_router(admin_router)
+app.include_router(health_router)
 
 
 @app.get("/", tags=["meta"])

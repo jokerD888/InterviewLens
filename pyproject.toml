@@ -31,7 +31,7 @@ dependencies = [
     "tenacity>=9.0",
     # embedding
     "sentence-transformers>=5.6,<6",
-    "torch>=2.13,<3",
+    "torch>=2.13,<2.14",
     # tasks
     "celery>=5.4",
     "redis>=5.2",
@@ -82,3 +82,11 @@ constraint-dependencies = [
     "anyio>=4.14.2", "fsspec>=2026.6.0", "langgraph-sdk>=0.4.4",
     "langsmith>=0.8.18", "setuptools>=83.0.0", "soupsieve>=2.9.0", "urllib3>=2.8.0",
 ]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

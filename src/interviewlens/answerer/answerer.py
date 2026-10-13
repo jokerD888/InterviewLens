@@ -37,14 +37,14 @@ class AnswerOutcome:
     failed: int = 0
 
 
-async def generate_one(*, content: str, category: str | None, trace=None) -> str | None:
+async def generate_one(*, content: str, category: str | None, trace=None, use_cache: bool = True) -> str | None:
     """Generate (or fetch cached) AI answer for one question. None on failure."""
     key = make_cache_key(
         namespace=ANSWER_NAMESPACE,
         payload={"content": content, "category": category, "model": settings.deepseek_model_chat},
         version=settings.answer_prompt_version,
     )
-    cached = await cache_get(key)
+    cached = await cache_get(key) if use_cache else None
     if cached and cached.get("answer"):
         return cached["answer"]
 
@@ -190,7 +190,7 @@ async def run_answers(
     async def _one(t: dict) -> None:
         nonlocal done
         async with sem:
-            answer = await generate_one(content=t["content"], category=t["category"])
+            answer = await generate_one(content=t["content"], category=t["category"], use_cache=not regenerate)
             if answer is None:
                 outcome.failed += 1
             else:

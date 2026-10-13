@@ -37,7 +37,7 @@ async def test_generate_answers_uses_answerer(monkeypatch) -> None:
 
     fake_session = _FakeSession()
 
-    async def fake_generate(*, content, category, trace=None):
+    async def fake_generate(*, content, category, trace=None, use_cache=True):
         return f"答案: {content}"
 
     monkeypatch.setattr(

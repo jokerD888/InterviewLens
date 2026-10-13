@@ -34,10 +34,12 @@ def create(root: Path, domain: str, email: str, networks: list[str], release: st
     values = {key: secrets.token_hex(32) for key in (
         "POSTGRES_PASSWORD", "REDIS_PASSWORD", "REDIS_CACHE_PASSWORD", "ADMIN_API_TOKEN",
         "LANGFUSE_DB_PASSWORD", "LANGFUSE_NEXTAUTH_SECRET", "LANGFUSE_SALT",
+        "APP_DB_PASSWORD", "MIGRATION_DB_PASSWORD",
     )}
     values.update(PUBLIC_DOMAIN=domain, ACME_EMAIL=email,
                   ADMIN_NETWORKS=" ".join(str(item) for item in checked),
-                  APP_IMAGE=f"interviewlens-api:{release}", WEB_IMAGE=f"interviewlens-web:{release}")
+                  APP_IMAGE=f"interviewlens-api:{release}", WEB_IMAGE=f"interviewlens-web:{release}",
+                  WORKER_IMAGE=f"interviewlens-worker:{release}", DATABASE_NAME="interviewlens")
     env = "\n".join(f'{key}="{value}"' for key, value in values.items()) + "\n"
     targets[0].touch(mode=0o600, exist_ok=False)
     private_file(targets[0])
@@ -51,12 +53,38 @@ def create(root: Path, domain: str, email: str, networks: list[str], release: st
     print("Created private deployment configuration. Credentials were not printed.")
 
 
+def upgrade(root: Path):
+    """Add new role credentials without rotating existing secrets/volume auth."""
+    path = root / ".env.production"
+    source = path.read_text(encoding="utf-8-sig")
+    values = dict(line.split("=", 1) for line in source.splitlines() if "=" in line and not line.lstrip().startswith("#"))
+    additions = {}
+    for key in ("APP_DB_PASSWORD", "MIGRATION_DB_PASSWORD"):
+        if key not in values:
+            additions[key] = secrets.token_hex(32)
+    if "DATABASE_NAME" not in values:
+        additions["DATABASE_NAME"] = "interviewlens"
+    if "WORKER_IMAGE" not in values:
+        release = values["APP_IMAGE"].strip('"').rsplit(":", 1)[1]
+        additions["WORKER_IMAGE"] = f"interviewlens-worker:{release}"
+    private_file(path)
+    if additions:
+        path.write_text(source.rstrip() + "\n" + "\n".join(f'{key}="{value}"' for key, value in additions.items()) + "\n", encoding="utf-8")
+    print("Updated private configuration; existing credentials preserved.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--domain", required=True)
-    parser.add_argument("--email", required=True)
-    parser.add_argument("--admin-network", action="append", required=True)
-    parser.add_argument("--release", required=True)
+    parser.add_argument("--domain")
+    parser.add_argument("--email")
+    parser.add_argument("--admin-network", action="append")
+    parser.add_argument("--release")
+    parser.add_argument("--upgrade", action="store_true")
     parser.add_argument("--directory", type=Path, default=Path(__file__).resolve().parents[1] / "deploy")
     args = parser.parse_args()
-    create(args.directory, args.domain, args.email, args.admin_network, args.release)
+    if args.upgrade:
+        upgrade(args.directory)
+    else:
+        if not all((args.domain, args.email, args.admin_network, args.release)):
+            parser.error("Creating config requires domain, email, admin-network and release")
+        create(args.directory, args.domain, args.email, args.admin_network, args.release)

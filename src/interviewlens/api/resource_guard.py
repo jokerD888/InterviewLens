@@ -28,6 +28,7 @@ if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return {n, redis.call('TTL', KEYS[1])}
 """
 _jobs: set[asyncio.Task] = set()
+_job_started: dict[asyncio.Task, float] = {}
 _proxy_addresses: set[str] = set()
 _proxy_refreshed = 0.0
 T = TypeVar("T")
@@ -44,7 +45,10 @@ async def check_rate(request: Request):
     if forwarded and settings.trusted_search_proxy:
         if time.monotonic() - _proxy_refreshed > 30:
             try:
-                entries = await asyncio.to_thread(socket.getaddrinfo, settings.trusted_search_proxy, None)
+                def resolve_proxies():
+                    return [entry for name in settings.trusted_search_proxy.split(",") if name.strip()
+                            for entry in socket.getaddrinfo(name.strip(), None)]
+                entries = await asyncio.to_thread(resolve_proxies)
                 _proxy_addresses = {entry[4][0] for entry in entries}
                 _proxy_refreshed = time.monotonic()
             except OSError:
@@ -73,7 +77,7 @@ class PublicResourceGuard(BaseHTTPMiddleware):
         length = request.headers.get("content-length", "0")
         if not length.isdigit() or int(length) > 1_048_576:
             return JSONResponse({"detail": "Request body too large"}, status_code=413)
-        if settings.app_env == "production" and request.url.path != "/":
+        if settings.app_env == "production" and request.url.path not in ("/", "/health/live", "/health/ready"):
             try:
                 await check_rate(request)
             except HTTPException as exc:
@@ -89,9 +93,11 @@ async def bounded_search_embed(operation: Callable[[], Awaitable[T]]) -> T:
         raise HTTPException(503, "Search is busy; try again shortly", headers={"Retry-After": "3"})
     task = asyncio.create_task(operation())
     _jobs.add(task)
+    _job_started[task] = time.monotonic()
 
     def finished(job):
         _jobs.discard(job)
+        _job_started.pop(job, None)
         # Consume late failures after an HTTP timeout/disconnect.
         if not job.cancelled():
             job.exception()
@@ -101,3 +107,9 @@ async def bounded_search_embed(operation: Callable[[], Awaitable[T]]) -> T:
         return await asyncio.wait_for(asyncio.shield(task), settings.search_timeout_seconds)
     except TimeoutError:
         raise HTTPException(504, "Search timed out; try again shortly", headers={"Retry-After": "5"}) from None
+
+
+def inference_healthy() -> bool:
+    # An abandoned HTTP request must not hide a permanently stuck torch job.
+    maximum_age = max(120, settings.search_timeout_seconds * 2)
+    return all(time.monotonic() - started < maximum_age for started in _job_started.values())

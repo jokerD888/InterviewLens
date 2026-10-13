@@ -76,7 +76,15 @@ async def _embed_cache_get(key: str) -> np.ndarray | None:
         blob = await r.get(key)
         if blob is None:
             return None
-        return np.frombuffer(base64.b64decode(blob), dtype=np.float32)
+        vector = np.frombuffer(base64.b64decode(blob, validate=True), dtype=np.float32)
+        with np.errstate(over="ignore", invalid="ignore"):
+            norm = float(np.linalg.norm(vector))
+        if vector.shape != (settings.embedding_dim,) or not np.isfinite(vector).all() or not np.isfinite(norm) or abs(norm - 1) > .01:
+            # Treat corrupted/obsolete cache as a miss; delete only this key.
+            await r.delete(key)
+            log.warning("search.embed_cache_invalid")
+            return None
+        return vector
     except (aioredis.RedisError, ValueError):
         log.warning("search.embed_cache_get_failed", exc_info=True)
         return None

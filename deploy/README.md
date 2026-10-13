@@ -4,7 +4,7 @@
 
 ## 服务器准备
 
-使用 Linux、Docker Engine 和 Compose v2。建议从至少 4 vCPU / 16 GiB RAM / 80 GiB 可用磁盘开始，按实测调整：本配置为 CPU BGE-M3 保留 6 GiB 内存；同时开启处理 worker 还需额外资源。当前锁定依赖包含 CUDA 包，因此镜像下载和构建较大；CPU 实际运行不需要 GPU。只支持一个 API 容器、一个 Uvicorn 进程，不能直接扩容复制模型；多实例需要独立推理服务及统一并发控制。
+使用 Linux、Docker Engine 和 Compose v2。建议从至少 4 vCPU / 16 GiB RAM / 80 GiB 可用磁盘开始，按实测调整：本配置为 CPU BGE-M3 保留 6 GiB 内存；同时开启处理 worker 还需额外资源。Linux 锁定官方 CPU Torch 2.13，不安装 CUDA；API 镜像不安装 Chromium，采集 worker 使用独立 worker target/image。Windows 本机 CUDA 环境不随生产镜像改变。只支持一个 API 容器、一个 Uvicorn 进程；多实例需要独立推理服务及统一并发控制。
 
 把仓库放在 `/opt/InterviewLens`，准备域名 A/AAAA 记录、正确系统时间、防火墙只放行 80/443，以及只允许管理 IP 的 SSH。Caddy 直接面对访问者，自动申请/续期证书。尚未配置 CDN/额外反向代理；不能直接相信它们传来的 IP 头。管理允许范围使用实际管理员公网 IP `/32` 或 VPN CIDR，不使用 `0.0.0.0/0`。
 
@@ -62,9 +62,9 @@ Redis 的任务/预算状态在独立持久卷并采用 `noeviction`；缓存可
 3. 把 `.env.production` 的 `APP_IMAGE/WEB_IMAGE` 改为已构建的新版本，运行 `up -d api web caddy`；迁移服务每次版本升级需 `up --force-recreate migrate` 并确认成功后启动应用。
 4. 检查首页 SSR、公司点击、最新面经展开、真实未缓存语义检索、匿名后台 403/401、管理员登录、非法参数 422、限流 429。重启 API/Web 后再确认同一批数据可读取。
 5. 仅应用改动且无不兼容迁移时，把两个镜像标签改回记录的旧版本，`up -d --no-deps api web`，**不要用旧代码重跑 migrate**。
-6. 不兼容数据库变更使用已验证备份恢复到新的库，核对后切换数据库 URL，再启动对应旧镜像；不要自动执行破坏性的 down migration，也不要删除生产卷。回滚到备份会损失备份之后的写入，因此保持停写并人工核对差异。
+6. 不兼容数据库变更使用已验证备份恢复到新的库，核对后将私有 `.env.production` 的 `DATABASE_NAME` 改为恢复库名，先对目标库运行 provision，确认需要的 schema/角色，再启动兼容镜像。应用、迁移和自动备份均读取同一目标，备份清单会记录源库；不要仅修改被 Compose 覆盖的 DATABASE_URL。旧代码不兼容新 schema 时不运行新版本 migrate。不要自动执行破坏性的 down migration，也不要删除生产卷。回滚到备份会损失备份之后的写入，因此保持停写并人工核对差异。
 
-本发布只有 API/UI 和运维工具改动，无业务表结构变化，保留原数据；后续迁移须在恢复副本先做升级与回滚演练。
+本发布新增 014 缓存版本元数据与业务写入触发器，不删除或重算业务数据。升级步骤、账号拆分、恢复切库、监控安装和评测命令见 [可靠性升级说明](../docs/deployment-reliability.md)。旧 API 的缓存机制不同，回滚前保持停写并检查缓存隔离；后续迁移须在恢复副本先演练。
 
 ## 来源与历史数据限制
 

@@ -1,7 +1,7 @@
 # ============================================================
 # InterviewLens · Backend image (FastAPI + Celery Worker)
 # ============================================================
-FROM python:3.13-slim
+FROM python:3.13-slim AS runtime
 
 WORKDIR /app
 
@@ -14,18 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 # ---- Layer 1: Python deps (cached unless pyproject/uv.lock change) ----
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
-
-# ---- Layer 2: Playwright Chromium (kept close to deps to maximise cache) ----
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
-RUN .venv/bin/playwright install --with-deps chromium
+RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 # ---- Layer 3: source + project install (lightweight: uv sync only does "pip install -e .") ----
 COPY src/ ./src/
 COPY data/ ./data/
 COPY sql/ ./sql/
 COPY README.md ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-cache
 
 # ---- HuggingFace cache volume mount point ----
 ENV HF_HOME=/models \
@@ -35,9 +31,18 @@ ENV HF_HOME=/models \
     PYTHONUNBUFFERED=1
 RUN useradd --uid 10001 --create-home app \
     && mkdir -p /models /app/.cache/huggingface \
-    && chown -R app:app /models /app/.cache /opt/playwright
+    && chown -R app:app /models /app/.cache
 USER app
 
 EXPOSE 8000
 
 CMD ["uvicorn", "interviewlens.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM runtime AS worker
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+RUN .venv/bin/playwright install --with-deps chromium \
+    && chown -R app:app /opt/playwright
+USER app
+
+FROM runtime AS api

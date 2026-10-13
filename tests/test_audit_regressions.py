@@ -178,8 +178,12 @@ async def test_cache_invalidation_does_not_allow_stale_repopulation(monkeypatch)
         async def incr(self,key): self.values[key]=int(self.values.get(key) or 0)+1
     redis=Redis()
     monkeypatch.setattr(cache,"get_redis",lambda:redis)
+    revision=[0]
+    async def read_revision(): return str(revision[0])
+    monkeypatch.setattr(cache,"read_revision",read_revision)
     key="il:api:audit-race"
     assert await cache.cache_json_get(key) is None
+    revision[0] += 1  # the business transaction commits its revision trigger
     await cache.invalidate_read_caches()
     await cache.cache_json_set(key,["stale"],ttl_seconds=60)
     assert await cache.cache_json_get(key) is None

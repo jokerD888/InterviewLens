@@ -12,6 +12,7 @@ from sqlmodel import select
 
 from ..config import settings
 from ..db import Company, Position
+from ..db.processing_reads import VISIBLE_POST_SQL
 from ..observability import incr_cache
 from .cache import cache_json_get, cache_json_set
 from .deps import get_session
@@ -44,8 +45,9 @@ async def list_companies(
         await incr_cache(False)
 
     if with_counts:
-        sql = """
-        SELECT c.id, c.canonical, c.industry, COUNT(DISTINCT pcp.post_id) AS n
+        sql = f"""
+        SELECT c.id, c.canonical, c.industry, COUNT(DISTINCT pcp.post_id)
+            FILTER (WHERE EXISTS(SELECT 1 FROM posts po WHERE po.id=pcp.post_id AND {VISIBLE_POST_SQL})) AS n
         FROM companies c
         LEFT JOIN post_companies pcp ON pcp.company_id = c.id
         GROUP BY c.id, c.canonical, c.industry
@@ -83,9 +85,18 @@ async def list_company_positions(
             return [CompanyPositionStat(**r) for r in cached]
         await incr_cache(False)
 
-    sql = """
-    SELECT * FROM v_company_position_stats
-    WHERE company_id = :cid
+    sql = f"""
+    SELECT c.id AS company_id,c.canonical AS company_name,
+           p.id AS position_id,p.canonical AS position_name,
+           count(DISTINCT po.id) AS post_count,
+           round(avg(po.content_score))::int AS avg_quality,
+           max(po.posted_at) AS latest_posted_at
+    FROM post_company_position pcp
+    JOIN posts po ON po.id=pcp.post_id
+    JOIN companies c ON c.id=pcp.company_id
+    JOIN positions p ON p.id=pcp.position_id
+    WHERE c.id=:cid AND {VISIBLE_POST_SQL}
+    GROUP BY c.id,c.canonical,p.id,p.canonical
     ORDER BY post_count DESC, position_name
     """
     rows = (await session.execute(sa_text(sql), {"cid": company_id})).mappings().all()
@@ -119,8 +130,9 @@ async def list_positions(
         await incr_cache(False)
 
     if with_counts:
-        sql = """
-        SELECT p.id, p.canonical, p.category, COUNT(DISTINCT pcp.post_id) AS n
+        sql = f"""
+        SELECT p.id, p.canonical, p.category, COUNT(DISTINCT pcp.post_id)
+            FILTER (WHERE EXISTS(SELECT 1 FROM posts po WHERE po.id=pcp.post_id AND {VISIBLE_POST_SQL})) AS n
         FROM positions p
         LEFT JOIN post_company_position pcp ON pcp.position_id = p.id
         GROUP BY p.id, p.canonical, p.category

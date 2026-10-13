@@ -26,6 +26,10 @@ def get_engine() -> AsyncEngine:
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=20,
+            connect_args={"server_settings": {
+                "statement_timeout": "15000", "lock_timeout": "3000",
+                "hnsw.ef_search": "200", "hnsw.iterative_scan": "strict_order",
+            }},
         )
     return _engine
 
