@@ -9,8 +9,12 @@ type Props = {
   onSelect: (canonical: string | null) => void;
 };
 
+export function useCompanyCatalog() {
+  return useSWR<Company[]>(paths.companies(), fetcher);
+}
+
 export function CompanyList({ selected, onSelect }: Props) {
-  const { data, error, isLoading } = useSWR<Company[]>(paths.companies(), fetcher);
+  const { data, error, isLoading } = useCompanyCatalog();
 
   if (isLoading) return <Skeleton n={12} />;
   if (error)
@@ -52,6 +56,7 @@ function Row({
     <li>
       <button
         onClick={onClick}
+        aria-pressed={Boolean(active)}
         className={cn(
           "group flex w-full items-center gap-3 px-2 py-1.5 text-left transition",
           active ? "bg-accent/10" : "hover:bg-sunk/60",
