@@ -20,7 +20,16 @@ pnpm dev                        # 默认 :3000
 |---|---|
 | `/` | 三栏：公司列表 / 岗位筛选 / 摘要面板 |
 | `/search` | 语义搜索题目，关键词高亮，分数 + 相似度展示 |
-| `/admin` | 健康检查 + Celery 队列 / DLQ / 节点延迟 / 缓存命中率 |
+| `/admin` | 独立管理登录；验证成功后显示健康检查、队列、岗位分类管理等 |
+
+公共导航只显示浏览、最新面经和检索，不提供后台入口。管理员直接访问 `/admin`，
+使用后端 `.env` 中的 `ADMIN_API_TOKEN` 登录；刷新后重新向后端验证，退出后清空本次后台缓存。
+管理接口（包括直接访问 API）仍由后端 `require_admin` 鉴权，隐藏导航不承担安全防护。
+后台页面设置 `noindex, nofollow`；这只控制搜索引擎收录，不代表访问控制。
+
+公网部署应使用 HTTPS，并限制后台及其 API 的访问范围（例如反向代理的 IP 白名单或受控管理网络）。
+管理凭据不得写入 `NEXT_PUBLIC_*` 或前端源码。当前仍使用单管理员凭据，本次改动不包含完整的用户账号或多管理员权限系统。
+权限控制原则参考 [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)。
 
 ## 文件树
 

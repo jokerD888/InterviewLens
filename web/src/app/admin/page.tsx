@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { PositionEditor } from "@/components/position-editor";
+import { AdminGate } from "@/components/admin-access";
 
 type MetricsBody = {
   cache: { hits: number; misses: number; hit_rate: number };
@@ -22,6 +23,10 @@ type MetricsBody = {
 };
 
 export default function AdminPage() {
+  return <AdminGate><AdminDashboard /></AdminGate>;
+}
+
+function AdminDashboard() {
   const { data: health } = useSWR<Health>(paths.health(), fetcher, { refreshInterval: 5000 });
   const { data: jobs } = useSWR<Jobs>(paths.jobs(), fetcher, { refreshInterval: 5000 });
   const { data: metrics } = useSWR<MetricsBody>(paths.metrics(), fetcher, { refreshInterval: 5000 });
@@ -30,7 +35,7 @@ export default function AdminPage() {
     <div className="mx-auto max-w-screen-xl space-y-5 px-6 py-6">
       <div className="rise rise-1">
         <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-accent">控制台</p>
-        <h1 className="font-display text-2xl font-black tracking-masthead text-ink">机房 · Operations</h1>
+        <h1 className="font-display text-2xl font-black tracking-masthead text-ink">管理后台</h1>
       </div>
 
       <div className="rise rise-2 grid grid-cols-1 gap-5 lg:grid-cols-2">

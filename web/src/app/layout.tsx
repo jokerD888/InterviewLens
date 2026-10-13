@@ -1,7 +1,6 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 import "./globals.css";
-import { AdminAccess } from "../components/admin-access";
 import { ThemeToggle } from "../components/theme-toggle";
 
 export const metadata: Metadata = {
@@ -60,8 +59,6 @@ function Masthead() {
           <NavLink href="/">浏览</NavLink>
           <NavLink href="/feed">最新面经</NavLink>
           <NavLink href="/search">检索</NavLink>
-          <NavLink href="/admin">机房</NavLink>
-          <AdminAccess />
           <a
             href="https://github.com/jokerD888/InterviewLens"
             target="_blank"

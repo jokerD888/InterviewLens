@@ -257,6 +257,13 @@ export const paths = {
   dlq: (taskName: string, limit = 50) => `/admin/dlq/${encodeURIComponent(taskName)}${qs({ limit })}`,
 };
 
+export class HttpError extends Error {
+  constructor(public readonly status: number, path: string) {
+    super(`HTTP ${status} on ${path}`);
+    this.name = "HttpError";
+  }
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (typeof window !== "undefined" && (path.startsWith("/admin/") || path.startsWith("/bridge/"))) {
@@ -264,7 +271,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
   const resp = await fetch(`${API_PREFIX}${path}`, { cache: "no-store", ...init, headers });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} on ${path}`);
+  if (!resp.ok) throw new HttpError(resp.status, path);
   return resp.json() as Promise<T>;
 }
 
